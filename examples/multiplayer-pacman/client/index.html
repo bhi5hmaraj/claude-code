@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Pac-Man</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #000;
+            font-family: 'Courier New', monospace;
+            color: #fff;
+        }
+
+        #gameCanvas {
+            border: 4px solid #00f;
+            box-shadow: 0 0 20px rgba(0, 100, 255, 0.5);
+            background: #000;
+        }
+
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(0, 0, 100, 0.5);
+            border: 2px solid #00f;
+            border-radius: 8px;
+            max-width: 800px;
+        }
+
+        .player-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            margin: 3px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+
+        .player-1 { background: #ff0; color: #000; } /* Pac-Man Yellow */
+        .player-2 { background: #f0f; color: #000; } /* Pink */
+        .player-3 { background: #0ff; color: #000; } /* Cyan */
+        .player-4 { background: #0f0; color: #000; } /* Green */
+
+        .ghost { background: #f00; color: #fff; } /* Red Ghost */
+
+        h1 { color: #ff0; text-shadow: 0 0 10px #ff0; }
+        p { margin: 5px 0; }
+
+        #status {
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(255, 255, 0, 0.2);
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>👻 MULTIPLAYER PAC-MAN 👻</h1>
+
+    <div id="status">Connecting to server...</div>
+
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <div class="info">
+        <h3>🎮 Built by Multi-Agent System</h3>
+        <p>
+            <span class="player-badge ghost">ARCHITECT</span>
+            <span class="player-badge ghost">BUILDER</span>
+            <span class="player-badge ghost">SCRIBE</span>
+        </p>
+        <p><strong>Controls:</strong> Arrow Keys / WASD to move</p>
+        <p><strong>Goal:</strong> Collect all pellets, eat ghosts when powered up!</p>
+        <p><strong>Players:</strong>
+            <span class="player-badge player-1">P1</span>
+            <span class="player-badge player-2">P2</span>
+            <span class="player-badge player-3">P3</span>
+            <span class="player-badge player-4">P4</span>
+        </p>
+    </div>
+
+    <!-- Colyseus Client SDK -->
+    <script src="https://unpkg.com/colyseus.js@^0.15.0/dist/colyseus.js"></script>
+
+    <!-- Game Client -->
+    <script src="js/game.js"></script>
+</body>
+</html>
