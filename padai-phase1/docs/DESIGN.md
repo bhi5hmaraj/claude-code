@@ -174,26 +174,141 @@ MVP is successful if:
 
 ## Development Phases
 
-### Phase 1: Master Server (Today)
-- Express server with 3 endpoints
-- Shell out to bd CLI
-- Deploy to Railway
-- **Time estimate: 1-2 hours**
+### ✅ Phase 1: Simple MVP (COMPLETED)
 
-### Phase 2: Dashboard Integration (Today)
-- Add polling to existing React app
-- Deploy dashboard to Railway static site
-- **Time estimate: 30 minutes**
+**Goal:** Validate the concept with the simplest possible implementation.
 
-### Phase 3: Worker Integration (Today)
-- Create example slash command for workers
-- Test with 2-3 agents on real task
-- **Time estimate: 30 minutes**
+**What we built:**
+- **Backend:** FastAPI server (Python) wrapping bd CLI
+  - `beads.py` - Python wrapper for bd CLI operations
+  - `main.py` - FastAPI server with 5 HTTP endpoints
+  - Endpoints: `/api/status`, `/api/ready`, `/api/tasks`, `/api/claim`, `/api/complete`
+  - Uses `bd --no-db` mode for JSONL-only operation
 
-### Phase 4: Polish (Later)
-- Add features based on actual pain points
-- Monitor usage, identify bottlenecks
-- **Time estimate: TBD based on learnings**
+- **Frontend:** React + TypeScript + Vite
+  - React Flow visualization with Dagre layout
+  - Real-time polling (5 second interval)
+  - Dark theme UI with status color coding
+  - Mini-map and controls for navigation
+
+- **Worker Integration:** Simple curl commands
+  - `WORKER_GUIDE.md` - Complete guide for worker agents
+  - `test-agent.sh` - Bash script for testing workflows
+  - No MCP needed - just HTTP + curl
+
+- **Deployment:** Docker + Railway ready
+  - `Dockerfile` - Multi-stage build with bd CLI
+  - `railway.json` - One-click deployment config
+
+**Stack choices:**
+- Python instead of Express (better alignment with beads-mcp for Phase 2)
+- FastAPI for async + automatic docs
+- React Flow for dependency graph visualization
+
+**Status:** ✅ Tested and working
+- Task claim/complete workflow verified
+- Dependency graph visualization working
+- Ready for multi-agent testing
+
+**Time spent:** ~4 hours
+
+### 🔄 Phase 2: Explore beads-mcp Integration (PLANNED)
+
+**Goal:** Investigate if we can leverage existing beads-mcp infrastructure instead of building from scratch.
+
+**Background:**
+The Beads ecosystem already has `beads-mcp` (https://github.com/steveyegge/beads/tree/main/integrations/beads-mcp), which provides:
+- FastMCP server wrapping bd CLI with ~20 tool functions
+- Agent Mail for inter-agent HTTP messaging
+- Persistent context storage across MCP requests
+- Remote access via Streamable HTTP transport
+
+**Key question:** Can we extend/reuse beads-mcp instead of maintaining parallel infrastructure?
+
+**Investigation tasks:**
+
+1. **Understand beads-mcp architecture**
+   - How does Agent Mail work?
+   - What's the daemon doing?
+   - Can we use remote MCP transport for workers?
+   - Read: `/beads/integrations/beads-mcp/src/beads_mcp/`
+
+2. **Compare approaches:**
+   ```
+   Current (Phase 1):     Proposed (Phase 2):
+   ┌─────────────┐        ┌─────────────┐
+   │ PadAI HTTP  │        │ beads-mcp   │
+   │ FastAPI     │   vs   │ FastMCP     │
+   │ bd CLI      │        │ bd tools    │
+   └─────────────┘        └─────────────┘
+   ```
+
+3. **Evaluate options:**
+
+   **Option A: Extend beads-mcp**
+   - Fork/PR to add multi-agent coordination
+   - Add HTTP endpoints on top of MCP
+   - Pros: Leverage existing tools, stay in sync with Beads
+   - Cons: Coupling to beads-mcp development
+
+   **Option B: Import beads-mcp tools**
+   - Keep PadAI FastAPI server
+   - Import `from beads_mcp.tools import *`
+   - Add thin HTTP layer on top
+   - Pros: Reuse battle-tested code, control our API
+   - Cons: Still some duplication
+
+   **Option C: Remote MCP wrapper**
+   - Run beads-mcp as remote MCP server
+   - PadAI becomes HTTP→MCP proxy
+   - Workers use native MCP protocol
+   - Pros: Clean separation, MCP native
+   - Cons: Extra abstraction layer
+
+4. **MCP for workers (instead of curl)**
+   - Expose PadAI as remote MCP server
+   - Workers use MCP tools: `mcp__padai__claim_task`, `mcp__padai__complete_task`
+   - Much cleaner than curl in agent workflows
+   - FastMCP makes this trivial to add
+
+5. **Agent Mail integration**
+   - Investigate beads-mcp Agent Mail for inter-agent messaging
+   - Could replace Telegram bot idea
+   - HTTP-based, simple protocol
+
+**Deliverables:**
+- Decision document: Which option to pursue
+- POC implementation if Option B/C chosen
+- Updated worker guide with MCP instructions
+
+**Time estimate:** 2-3 hours investigation + 3-4 hours implementation
+
+### Phase 3: Polish & Real-World Testing (PLANNED)
+
+**Goal:** Use PadAI to build a real project and fix pain points.
+
+**Tasks:**
+- Deploy to Railway with real .beads/ project
+- Have 3-4 Claude agents build something real (multiplayer Pac-Man?)
+- Identify bottlenecks and UX issues
+- Add WebSocket if polling feels slow
+- Add Telegram bot if coordination needs human oversight
+
+**Success criteria:**
+- Agents successfully collaborate without conflicts
+- Dashboard clearly shows progress
+- Total coordination overhead < 10% of dev time
+
+**Time estimate:** 1 day of testing + fixes
+
+### Phase 4: Production Hardening (FUTURE)
+
+Only if PadAI gets regular use:
+- Authentication & multi-tenancy
+- Monitoring & logging
+- Horizontal scaling
+- Task assignment strategies
+- Web UI for task creation
 
 ## Open Questions
 

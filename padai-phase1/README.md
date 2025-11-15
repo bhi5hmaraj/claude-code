@@ -193,42 +193,74 @@ Response:
 }
 ```
 
-## Agent Workflow (curl)
+## 🤖 For Worker Agents
 
-Example workflow for a Claude Code agent:
+If you're a Claude Code agent joining this project, see **[WORKER_GUIDE.md](WORKER_GUIDE.md)** for complete instructions.
 
+### Quick Start for Workers
+
+Set environment variables:
 ```bash
-#!/bin/bash
+export PADAI_MASTER="http://your-server.railway.app"
+export AGENT_NAME="claude-worker-$(date +%s)"
+```
 
-AGENT_NAME="agent-1"
-API_URL="http://localhost:8000"
-
-# 1. Check status
-echo "Checking project status..."
-curl -s $API_URL/api/status | jq
-
-# 2. Claim next task
-echo "Claiming next task..."
-TASK=$(curl -s -X POST $API_URL/api/claim \
+Claim and complete a task:
+```bash
+# Claim next available task
+TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
   -H "Content-Type: application/json" \
   -d "{\"agent_name\": \"$AGENT_NAME\"}")
 
 TASK_ID=$(echo $TASK | jq -r '.task.id')
-TASK_TITLE=$(echo $TASK | jq -r '.task.title')
+echo "📋 Working on: $TASK_ID - $(echo $TASK | jq -r '.task.title')"
 
-echo "Claimed: $TASK_ID - $TASK_TITLE"
+# Do your work here...
 
-# 3. Do the work
-echo "Working on task..."
-# ... implement the task ...
-
-# 4. Mark as complete
-echo "Completing task..."
-curl -s -X POST $API_URL/api/complete \
+# Mark as complete
+curl -s -X POST $PADAI_MASTER/api/complete \
   -H "Content-Type: application/json" \
-  -d "{\"task_id\": \"$TASK_ID\"}" | jq
+  -d "{\"task_id\": \"$TASK_ID\"}"
 
-echo "Done!"
+echo "✅ Task completed!"
+```
+
+### Example Agent Workflow Script
+
+See `test-agent.sh` for a complete example:
+
+```bash
+#!/bin/bash
+# Continuous worker loop
+
+PADAI_MASTER="${PADAI_MASTER:-http://localhost:8000}"
+AGENT_NAME="${AGENT_NAME:-worker-$$}"
+
+while true; do
+  # Check for ready tasks
+  READY=$(curl -s $PADAI_MASTER/api/status | jq -r '.ready')
+
+  if [ "$READY" -eq 0 ]; then
+    echo "⏸️  No tasks ready, waiting..."
+    sleep 30
+    continue
+  fi
+
+  # Claim task
+  TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
+    -H "Content-Type: application/json" \
+    -d "{\"agent_name\": \"$AGENT_NAME\"}")
+
+  TASK_ID=$(echo $TASK | jq -r '.task.id')
+
+  # TODO: Implement the task
+  echo "⚙️  Working on $TASK_ID..."
+
+  # Complete task
+  curl -s -X POST $PADAI_MASTER/api/complete \
+    -H "Content-Type: application/json" \
+    -d "{\"task_id\": \"$TASK_ID\"}"
+done
 ```
 
 ## Environment Variables
