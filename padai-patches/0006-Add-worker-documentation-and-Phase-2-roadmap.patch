@@ -1,0 +1,770 @@
+From 17a7a3c1de4940567603bf91f26956f24f91b7c4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 15 Nov 2025 13:01:19 +0000
+Subject: [PATCH 6/6] Add worker documentation and Phase 2 roadmap
+
+Documentation for worker agents:
+- WORKER_GUIDE.md - Complete guide for Claude Code workers
+- .claude/commands/padai-worker.md - Slash command with quick instructions
+- Updated README.md with worker quick start
+
+Design updates:
+- Marked Phase 1 as COMPLETED with full details
+- Added comprehensive Phase 2 roadmap for beads-mcp exploration
+- Outlined 3 integration options (extend, import, proxy)
+- Added Phase 3 (testing) and Phase 4 (production) plans
+
+Worker onboarding:
+- Simple curl-based workflow
+- Environment variable setup
+- Example scripts (test-agent.sh)
+- Troubleshooting guide
+
+Phase 2 investigation tasks:
+- Understand beads-mcp architecture
+- Evaluate Agent Mail for coordination
+- Compare remote MCP vs HTTP approaches
+- Decision framework for integration strategy
+
+Workers can now:
+1. Run `/padai-worker` slash command for instructions
+2. Read WORKER_GUIDE.md for detailed workflow
+3. Use simple curl commands to claim/complete tasks
+---
+ .claude/commands/padai-worker.md | 127 ++++++++++++
+ README.md                        |  80 +++++---
+ WORKER_GUIDE.md                  | 318 +++++++++++++++++++++++++++++++
+ docs/DESIGN.md                   | 155 +++++++++++++--
+ 4 files changed, 636 insertions(+), 44 deletions(-)
+ create mode 100644 .claude/commands/padai-worker.md
+ create mode 100644 WORKER_GUIDE.md
+
+diff --git a/.claude/commands/padai-worker.md b/.claude/commands/padai-worker.md
+new file mode 100644
+index 0000000..1bdc0ac
+--- /dev/null
++++ b/.claude/commands/padai-worker.md
+@@ -0,0 +1,127 @@
++# PadAI Worker Instructions
++
++You are a worker agent in a multi-agent PadAI project. Your job is to claim tasks from the master server, complete them, and mark them as done.
++
++## Setup
++
++First, set these environment variables:
++
++```bash
++export PADAI_MASTER="{{PADAI_MASTER_URL}}"
++export AGENT_NAME="{{YOUR_AGENT_NAME}}"
++```
++
++Replace:
++- `{{PADAI_MASTER_URL}}` with the PadAI master server URL (e.g., `http://padai.railway.app`)
++- `{{YOUR_AGENT_NAME}}` with a unique name (e.g., `frontend-specialist`, `backend-dev`)
++
++## Workflow
++
++### 1. Check available tasks
++
++```bash
++curl -s $PADAI_MASTER/api/ready | jq '.tasks'
++```
++
++### 2. Claim next task
++
++```bash
++TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
++  -H "Content-Type: application/json" \
++  -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++TASK_ID=$(echo $TASK | jq -r '.task.id')
++TASK_TITLE=$(echo $TASK | jq -r '.task.title')
++
++echo "Working on: $TASK_ID - $TASK_TITLE"
++```
++
++### 3. Read task details
++
++```bash
++echo $TASK | jq '.task'
++```
++
++This shows:
++- `id` - Task identifier
++- `title` - What to do
++- `description` - Additional details
++- `dependencies` - What this task depends on
++
++### 4. Implement the task
++
++Do your work:
++- Read relevant files
++- Make changes
++- Test your implementation
++- Commit your code
++
++### 5. Mark as complete
++
++When finished:
++
++```bash
++curl -s -X POST $PADAI_MASTER/api/complete \
++  -H "Content-Type: application/json" \
++  -d "{\"task_id\": \"$TASK_ID\"}" | jq
++
++echo "Task $TASK_ID completed!"
++```
++
++### 6. Repeat
++
++Go back to step 1 and claim the next task.
++
++## Full Example
++
++```bash
++# Setup (once)
++export PADAI_MASTER="http://localhost:8000"
++export AGENT_NAME="claude-agent-$(date +%s)"
++
++# Claim task
++TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
++  -H "Content-Type: application/json" \
++  -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++TASK_ID=$(echo $TASK | jq -r '.task.id')
++echo "Working on: $TASK_ID"
++
++# Show task details
++echo $TASK | jq '.task | {id, title, description}'
++
++# Do the work...
++# (implement the task)
++
++# Mark complete
++curl -s -X POST $PADAI_MASTER/api/complete \
++  -H "Content-Type: application/json" \
++  -d "{\"task_id\": \"$TASK_ID\"}"
++```
++
++## Important Notes
++
++1. **Only claim when ready** - Don't claim tasks you can't immediately work on
++2. **Complete atomically** - Only mark complete when fully done and tested
++3. **Check dependencies** - Review `task.dependencies` to understand blockers
++4. **Commit your work** - Make git commits for completed tasks
++
++## Troubleshooting
++
++**No tasks available:**
++```bash
++curl -s $PADAI_MASTER/api/status
++```
++
++**Can't reach server:**
++```bash
++curl $PADAI_MASTER/
++# Should return: {"status":"ok","service":"PadAI Master Server"}
++```
++
++**Task already claimed:**
++If you get a 404 when claiming, another agent just claimed the last task. Wait and retry.
++
++## More Information
++
++See `WORKER_GUIDE.md` for the complete guide with advanced workflows and continuous worker loops.
+diff --git a/README.md b/README.md
+index c426933..1e22987 100644
+--- a/README.md
++++ b/README.md
+@@ -193,42 +193,74 @@ Response:
+ }
+ ```
+ 
+-## Agent Workflow (curl)
++## 🤖 For Worker Agents
+ 
+-Example workflow for a Claude Code agent:
++If you're a Claude Code agent joining this project, see **[WORKER_GUIDE.md](WORKER_GUIDE.md)** for complete instructions.
+ 
+-```bash
+-#!/bin/bash
+-
+-AGENT_NAME="agent-1"
+-API_URL="http://localhost:8000"
++### Quick Start for Workers
+ 
+-# 1. Check status
+-echo "Checking project status..."
+-curl -s $API_URL/api/status | jq
++Set environment variables:
++```bash
++export PADAI_MASTER="http://your-server.railway.app"
++export AGENT_NAME="claude-worker-$(date +%s)"
++```
+ 
+-# 2. Claim next task
+-echo "Claiming next task..."
+-TASK=$(curl -s -X POST $API_URL/api/claim \
++Claim and complete a task:
++```bash
++# Claim next available task
++TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
+   -H "Content-Type: application/json" \
+   -d "{\"agent_name\": \"$AGENT_NAME\"}")
+ 
+ TASK_ID=$(echo $TASK | jq -r '.task.id')
+-TASK_TITLE=$(echo $TASK | jq -r '.task.title')
+-
+-echo "Claimed: $TASK_ID - $TASK_TITLE"
++echo "📋 Working on: $TASK_ID - $(echo $TASK | jq -r '.task.title')"
+ 
+-# 3. Do the work
+-echo "Working on task..."
+-# ... implement the task ...
++# Do your work here...
+ 
+-# 4. Mark as complete
+-echo "Completing task..."
+-curl -s -X POST $API_URL/api/complete \
++# Mark as complete
++curl -s -X POST $PADAI_MASTER/api/complete \
+   -H "Content-Type: application/json" \
+-  -d "{\"task_id\": \"$TASK_ID\"}" | jq
++  -d "{\"task_id\": \"$TASK_ID\"}"
++
++echo "✅ Task completed!"
++```
++
++### Example Agent Workflow Script
++
++See `test-agent.sh` for a complete example:
++
++```bash
++#!/bin/bash
++# Continuous worker loop
++
++PADAI_MASTER="${PADAI_MASTER:-http://localhost:8000}"
++AGENT_NAME="${AGENT_NAME:-worker-$$}"
++
++while true; do
++  # Check for ready tasks
++  READY=$(curl -s $PADAI_MASTER/api/status | jq -r '.ready')
++
++  if [ "$READY" -eq 0 ]; then
++    echo "⏸️  No tasks ready, waiting..."
++    sleep 30
++    continue
++  fi
++
++  # Claim task
++  TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
++    -H "Content-Type: application/json" \
++    -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++  TASK_ID=$(echo $TASK | jq -r '.task.id')
++
++  # TODO: Implement the task
++  echo "⚙️  Working on $TASK_ID..."
+ 
+-echo "Done!"
++  # Complete task
++  curl -s -X POST $PADAI_MASTER/api/complete \
++    -H "Content-Type: application/json" \
++    -d "{\"task_id\": \"$TASK_ID\"}"
++done
+ ```
+ 
+ ## Environment Variables
+diff --git a/WORKER_GUIDE.md b/WORKER_GUIDE.md
+new file mode 100644
+index 0000000..819c563
+--- /dev/null
++++ b/WORKER_GUIDE.md
+@@ -0,0 +1,318 @@
++# PadAI Worker Agent Guide
++
++This guide is for Claude Code agents working on tasks coordinated by the PadAI master server.
++
++## Quick Start
++
++The PadAI master server coordinates work across multiple agents. You communicate with it using simple HTTP requests.
++
++### Master Server URL
++
++```bash
++# Set this in your environment or use directly
++export PADAI_MASTER="http://your-padai-server.railway.app"
++# Or for local testing
++export PADAI_MASTER="http://localhost:8000"
++```
++
++### Your Agent Name
++
++Choose a unique name for yourself:
++```bash
++export AGENT_NAME="claude-agent-$(date +%s)"
++# Or use a descriptive name
++export AGENT_NAME="frontend-specialist"
++```
++
++## Worker Workflow
++
++### 1. Check What's Available
++
++See what tasks are ready to claim:
++
++```bash
++curl -s $PADAI_MASTER/api/ready | jq '.tasks'
++```
++
++Response:
++```json
++{
++  "tasks": [
++    {
++      "id": "padai-4",
++      "title": "GET /api/status endpoint",
++      "status": "ready"
++    }
++  ]
++}
++```
++
++### 2. Claim a Task
++
++Claim the next available task:
++
++```bash
++TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
++  -H "Content-Type: application/json" \
++  -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++echo $TASK | jq
++```
++
++Response:
++```json
++{
++  "task": {
++    "id": "padai-4",
++    "title": "GET /api/status endpoint",
++    "status": "in_progress",
++    "assignee": "claude-agent-123",
++    "dependencies": [...]
++  }
++}
++```
++
++Extract task details:
++```bash
++TASK_ID=$(echo $TASK | jq -r '.task.id')
++TASK_TITLE=$(echo $TASK | jq -r '.task.title')
++
++echo "📋 Working on: $TASK_ID - $TASK_TITLE"
++```
++
++### 3. Do the Work
++
++Implement the task according to its description. Read the task details, implement the feature, test it, and commit your changes.
++
++```bash
++# Example workflow
++echo "Implementing: $TASK_TITLE"
++
++# Read task details
++echo $TASK | jq '.task'
++
++# Do your work here...
++# - Read relevant files
++# - Make changes
++# - Test
++# - Commit
++```
++
++### 4. Mark as Complete
++
++When done, mark the task as completed:
++
++```bash
++curl -s -X POST $PADAI_MASTER/api/complete \
++  -H "Content-Type: application/json" \
++  -d "{\"task_id\": \"$TASK_ID\"}" | jq
++
++echo "✅ Task $TASK_ID completed!"
++```
++
++### 5. Repeat
++
++Loop back to step 1 to claim the next task.
++
++## Full Example Script
++
++```bash
++#!/bin/bash
++# worker-loop.sh - Continuous worker agent
++
++set -e
++
++PADAI_MASTER="${PADAI_MASTER:-http://localhost:8000}"
++AGENT_NAME="${AGENT_NAME:-claude-worker-$$}"
++
++echo "🤖 Agent: $AGENT_NAME"
++echo "🌐 Master: $PADAI_MASTER"
++echo ""
++
++while true; do
++  echo "🔍 Checking for available tasks..."
++
++  # Check if any tasks are ready
++  READY_COUNT=$(curl -s $PADAI_MASTER/api/status | jq -r '.ready')
++
++  if [ "$READY_COUNT" -eq 0 ]; then
++    echo "⏸️  No tasks ready. Waiting 30s..."
++    sleep 30
++    continue
++  fi
++
++  echo "📋 $READY_COUNT tasks available. Claiming one..."
++
++  # Claim next task
++  TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
++    -H "Content-Type: application/json" \
++    -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++  TASK_ID=$(echo $TASK | jq -r '.task.id')
++  TASK_TITLE=$(echo $TASK | jq -r '.task.title')
++
++  if [ "$TASK_ID" = "null" ]; then
++    echo "❌ Failed to claim task. Retrying..."
++    sleep 10
++    continue
++  fi
++
++  echo "✅ Claimed: $TASK_ID - $TASK_TITLE"
++  echo ""
++  echo "Task details:"
++  echo $TASK | jq '.task'
++  echo ""
++
++  # TODO: Implement the task here
++  # For now, just simulate work
++  echo "⚙️  Working on task..."
++  sleep 5
++
++  # Mark as complete
++  echo "Completing task $TASK_ID..."
++  curl -s -X POST $PADAI_MASTER/api/complete \
++    -H "Content-Type: application/json" \
++    -d "{\"task_id\": \"$TASK_ID\"}" | jq
++
++  echo "✅ Task $TASK_ID completed!"
++  echo ""
++  echo "---"
++  echo ""
++done
++```
++
++## API Reference
++
++### GET /api/status
++
++Get project statistics.
++
++```bash
++curl $PADAI_MASTER/api/status
++```
++
++Response:
++```json
++{
++  "total": 18,
++  "ready": 5,
++  "in_progress": 2,
++  "completed": 11
++}
++```
++
++### GET /api/ready
++
++List tasks ready to claim.
++
++```bash
++curl $PADAI_MASTER/api/ready
++```
++
++### GET /api/tasks
++
++Get all tasks with dependencies (useful for understanding the full project).
++
++```bash
++curl $PADAI_MASTER/api/tasks
++```
++
++### POST /api/claim
++
++Claim a task. Returns the full task object with dependencies.
++
++```bash
++curl -X POST $PADAI_MASTER/api/claim \
++  -H "Content-Type: application/json" \
++  -d '{"agent_name": "your-agent-name"}'
++```
++
++### POST /api/complete
++
++Mark a task as completed.
++
++```bash
++curl -X POST $PADAI_MASTER/api/complete \
++  -H "Content-Type: application/json" \
++  -d '{"task_id": "padai-4"}'
++```
++
++## Tips for Claude Code Agents
++
++### Understanding Your Task
++
++When you claim a task, examine:
++- `task.title` - What needs to be done
++- `task.description` - Additional details
++- `task.dependencies` - What other tasks this depends on
++
++### Coordination
++
++- Only claim tasks when you're ready to work on them
++- If you get stuck, you can abandon a task (manually update via bd CLI)
++- Check dependencies - don't start work that's blocked
++
++### Best Practices
++
++1. **Always claim before starting** - Don't just pick a task from the ready list
++2. **Complete atomically** - Only mark complete when fully done and tested
++3. **Commit your work** - Make git commits for each completed task
++4. **Communicate** - (Phase 2 will add Telegram/Agent Mail for this)
++
++## Troubleshooting
++
++### No tasks available
++
++```bash
++# Check project status
++curl $PADAI_MASTER/api/status
++
++# See all tasks and their states
++curl $PADAI_MASTER/api/tasks | jq '.tasks[] | {id, title, status}'
++```
++
++### Task claim failed
++
++If you get a 404 when claiming, all ready tasks were just claimed by other agents. Wait and retry.
++
++### Can't reach master server
++
++```bash
++# Test connectivity
++curl $PADAI_MASTER/
++
++# Should return: {"status":"ok","service":"PadAI Master Server"}
++```
++
++## Phase 2 Features (Coming Soon)
++
++- **Remote MCP** - Use MCP tools instead of curl
++- **Agent Mail** - Send messages to other agents
++- **WebSocket** - Real-time task updates
++- **Telegram Bot** - Human oversight and coordination
++
++## Example: Claude Code Usage
++
++As a Claude Code agent, you can use these commands directly:
++
++```bash
++# In your conversation
++export PADAI_MASTER="http://your-server.railway.app"
++export AGENT_NAME="claude-$(hostname)"
++
++# Claim next task
++TASK=$(curl -s -X POST $PADAI_MASTER/api/claim \
++  -H "Content-Type: application/json" \
++  -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++# Extract task ID
++TASK_ID=$(echo $TASK | jq -r '.task.id')
++echo "Working on: $TASK_ID"
++
++# Do the work...
++
++# Complete when done
++curl -s -X POST $PADAI_MASTER/api/complete \
++  -H "Content-Type: application/json" \
++  -d "{\"task_id\": \"$TASK_ID\"}"
++```
+diff --git a/docs/DESIGN.md b/docs/DESIGN.md
+index 1508e2f..b6461db 100644
+--- a/docs/DESIGN.md
++++ b/docs/DESIGN.md
+@@ -174,26 +174,141 @@ MVP is successful if:
+ 
+ ## Development Phases
+ 
+-### Phase 1: Master Server (Today)
+-- Express server with 3 endpoints
+-- Shell out to bd CLI
+-- Deploy to Railway
+-- **Time estimate: 1-2 hours**
+-
+-### Phase 2: Dashboard Integration (Today)
+-- Add polling to existing React app
+-- Deploy dashboard to Railway static site
+-- **Time estimate: 30 minutes**
+-
+-### Phase 3: Worker Integration (Today)
+-- Create example slash command for workers
+-- Test with 2-3 agents on real task
+-- **Time estimate: 30 minutes**
+-
+-### Phase 4: Polish (Later)
+-- Add features based on actual pain points
+-- Monitor usage, identify bottlenecks
+-- **Time estimate: TBD based on learnings**
++### ✅ Phase 1: Simple MVP (COMPLETED)
++
++**Goal:** Validate the concept with the simplest possible implementation.
++
++**What we built:**
++- **Backend:** FastAPI server (Python) wrapping bd CLI
++  - `beads.py` - Python wrapper for bd CLI operations
++  - `main.py` - FastAPI server with 5 HTTP endpoints
++  - Endpoints: `/api/status`, `/api/ready`, `/api/tasks`, `/api/claim`, `/api/complete`
++  - Uses `bd --no-db` mode for JSONL-only operation
++
++- **Frontend:** React + TypeScript + Vite
++  - React Flow visualization with Dagre layout
++  - Real-time polling (5 second interval)
++  - Dark theme UI with status color coding
++  - Mini-map and controls for navigation
++
++- **Worker Integration:** Simple curl commands
++  - `WORKER_GUIDE.md` - Complete guide for worker agents
++  - `test-agent.sh` - Bash script for testing workflows
++  - No MCP needed - just HTTP + curl
++
++- **Deployment:** Docker + Railway ready
++  - `Dockerfile` - Multi-stage build with bd CLI
++  - `railway.json` - One-click deployment config
++
++**Stack choices:**
++- Python instead of Express (better alignment with beads-mcp for Phase 2)
++- FastAPI for async + automatic docs
++- React Flow for dependency graph visualization
++
++**Status:** ✅ Tested and working
++- Task claim/complete workflow verified
++- Dependency graph visualization working
++- Ready for multi-agent testing
++
++**Time spent:** ~4 hours
++
++### 🔄 Phase 2: Explore beads-mcp Integration (PLANNED)
++
++**Goal:** Investigate if we can leverage existing beads-mcp infrastructure instead of building from scratch.
++
++**Background:**
++The Beads ecosystem already has `beads-mcp` (https://github.com/steveyegge/beads/tree/main/integrations/beads-mcp), which provides:
++- FastMCP server wrapping bd CLI with ~20 tool functions
++- Agent Mail for inter-agent HTTP messaging
++- Persistent context storage across MCP requests
++- Remote access via Streamable HTTP transport
++
++**Key question:** Can we extend/reuse beads-mcp instead of maintaining parallel infrastructure?
++
++**Investigation tasks:**
++
++1. **Understand beads-mcp architecture**
++   - How does Agent Mail work?
++   - What's the daemon doing?
++   - Can we use remote MCP transport for workers?
++   - Read: `/beads/integrations/beads-mcp/src/beads_mcp/`
++
++2. **Compare approaches:**
++   ```
++   Current (Phase 1):     Proposed (Phase 2):
++   ┌─────────────┐        ┌─────────────┐
++   │ PadAI HTTP  │        │ beads-mcp   │
++   │ FastAPI     │   vs   │ FastMCP     │
++   │ bd CLI      │        │ bd tools    │
++   └─────────────┘        └─────────────┘
++   ```
++
++3. **Evaluate options:**
++
++   **Option A: Extend beads-mcp**
++   - Fork/PR to add multi-agent coordination
++   - Add HTTP endpoints on top of MCP
++   - Pros: Leverage existing tools, stay in sync with Beads
++   - Cons: Coupling to beads-mcp development
++
++   **Option B: Import beads-mcp tools**
++   - Keep PadAI FastAPI server
++   - Import `from beads_mcp.tools import *`
++   - Add thin HTTP layer on top
++   - Pros: Reuse battle-tested code, control our API
++   - Cons: Still some duplication
++
++   **Option C: Remote MCP wrapper**
++   - Run beads-mcp as remote MCP server
++   - PadAI becomes HTTP→MCP proxy
++   - Workers use native MCP protocol
++   - Pros: Clean separation, MCP native
++   - Cons: Extra abstraction layer
++
++4. **MCP for workers (instead of curl)**
++   - Expose PadAI as remote MCP server
++   - Workers use MCP tools: `mcp__padai__claim_task`, `mcp__padai__complete_task`
++   - Much cleaner than curl in agent workflows
++   - FastMCP makes this trivial to add
++
++5. **Agent Mail integration**
++   - Investigate beads-mcp Agent Mail for inter-agent messaging
++   - Could replace Telegram bot idea
++   - HTTP-based, simple protocol
++
++**Deliverables:**
++- Decision document: Which option to pursue
++- POC implementation if Option B/C chosen
++- Updated worker guide with MCP instructions
++
++**Time estimate:** 2-3 hours investigation + 3-4 hours implementation
++
++### Phase 3: Polish & Real-World Testing (PLANNED)
++
++**Goal:** Use PadAI to build a real project and fix pain points.
++
++**Tasks:**
++- Deploy to Railway with real .beads/ project
++- Have 3-4 Claude agents build something real (multiplayer Pac-Man?)
++- Identify bottlenecks and UX issues
++- Add WebSocket if polling feels slow
++- Add Telegram bot if coordination needs human oversight
++
++**Success criteria:**
++- Agents successfully collaborate without conflicts
++- Dashboard clearly shows progress
++- Total coordination overhead < 10% of dev time
++
++**Time estimate:** 1 day of testing + fixes
++
++### Phase 4: Production Hardening (FUTURE)
++
++Only if PadAI gets regular use:
++- Authentication & multi-tenancy
++- Monitoring & logging
++- Horizontal scaling
++- Task assignment strategies
++- Web UI for task creation
+ 
+ ## Open Questions
+ 
+-- 
+2.43.0
+

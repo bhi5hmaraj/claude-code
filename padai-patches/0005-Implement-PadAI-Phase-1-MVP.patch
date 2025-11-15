@@ -1,0 +1,1672 @@
+From 9be1d3dccfa623515c0f4a2bb8f40c7f4009b620 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 15 Nov 2025 12:54:27 +0000
+Subject: [PATCH 5/6] Implement PadAI Phase 1 MVP
+
+Phase 1: FastAPI + React Flow with simple curl-based agent coordination
+
+Backend:
+- FastAPI server with HTTP endpoints (/api/status, /api/claim, /api/complete, /api/tasks)
+- Python bd CLI wrapper (beads.py) for task operations
+- CORS enabled for React frontend
+
+Frontend:
+- React + TypeScript + Vite
+- React Flow visualization with Dagre layout
+- Real-time status polling (5s interval)
+- Dark theme UI with status color coding
+
+Infrastructure:
+- Dockerfile for containerized deployment
+- Railway.json for one-click Railway deployment
+- test-agent.sh script for workflow testing
+
+Agent Workflow (curl):
+1. GET /api/ready - list available tasks
+2. POST /api/claim - claim next task
+3. Do the work
+4. POST /api/complete - mark as done
+
+Tested:
+- All API endpoints working
+- Task claim/complete workflow verified
+- Ready task parsing fixed for bd CLI output format
+- Status aggregation from bd status command
+
+Phase 2 roadmap:
+- Remote MCP instead of curl
+- Agent Mail integration
+- WebSocket real-time updates
+- Telegram bot
+---
+ Dockerfile                            |  45 ++++
+ README.md                             | 300 ++++++++++++++++++++++++--
+ beads.py                              | 224 +++++++++++++++++++
+ frontend/index.html                   |  12 ++
+ frontend/package.json                 |  25 +++
+ frontend/src/App.css                  |  82 +++++++
+ frontend/src/App.tsx                  | 102 +++++++++
+ frontend/src/components/TaskGraph.css | 132 ++++++++++++
+ frontend/src/components/TaskGraph.tsx | 179 +++++++++++++++
+ frontend/src/index.css                |  20 ++
+ frontend/src/main.tsx                 |  10 +
+ frontend/src/types.ts                 |  20 ++
+ frontend/tsconfig.json                |  21 ++
+ frontend/tsconfig.node.json           |  10 +
+ frontend/vite.config.ts               |  15 ++
+ main.py                               | 192 +++++++++++++++++
+ railway.json                          |  14 ++
+ requirements.txt                      |   4 +
+ test-agent.sh                         |  62 ++++++
+ 19 files changed, 1452 insertions(+), 17 deletions(-)
+ create mode 100644 Dockerfile
+ create mode 100644 beads.py
+ create mode 100644 frontend/index.html
+ create mode 100644 frontend/package.json
+ create mode 100644 frontend/src/App.css
+ create mode 100644 frontend/src/App.tsx
+ create mode 100644 frontend/src/components/TaskGraph.css
+ create mode 100644 frontend/src/components/TaskGraph.tsx
+ create mode 100644 frontend/src/index.css
+ create mode 100644 frontend/src/main.tsx
+ create mode 100644 frontend/src/types.ts
+ create mode 100644 frontend/tsconfig.json
+ create mode 100644 frontend/tsconfig.node.json
+ create mode 100644 frontend/vite.config.ts
+ create mode 100644 main.py
+ create mode 100644 railway.json
+ create mode 100644 requirements.txt
+ create mode 100755 test-agent.sh
+
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..6691ee7
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,45 @@
++# Build stage for frontend
++FROM node:18-alpine AS frontend-builder
++
++WORKDIR /app/frontend
++
++COPY frontend/package.json frontend/package-lock.json* ./
++RUN npm ci
++
++COPY frontend/ ./
++RUN npm run build
++
++# Production stage
++FROM python:3.11-slim
++
++# Install bd CLI
++RUN apt-get update && \
++    apt-get install -y curl && \
++    curl -L https://github.com/steveyegge/beads/releases/latest/download/bd-linux -o /usr/local/bin/bd && \
++    chmod +x /usr/local/bin/bd && \
++    apt-get clean && \
++    rm -rf /var/lib/apt/lists/*
++
++WORKDIR /app
++
++# Copy backend files
++COPY requirements.txt .
++RUN pip install --no-cache-dir -r requirements.txt
++
++COPY main.py beads.py ./
++
++# Copy built frontend
++COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
++
++# Set workspace path
++ENV WORKSPACE_PATH=/workspace
++
++# Expose port
++EXPOSE 8000
++
++# Health check
++HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
++  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/')" || exit 1
++
++# Run server
++CMD ["python", "main.py"]
+diff --git a/README.md b/README.md
+index b54ce91..c426933 100644
+--- a/README.md
++++ b/README.md
+@@ -1,24 +1,290 @@
+-# Beads JSONL → React Flow Visualizer
++# PadAI - Multi-Agent Orchestration Server
+ 
+-Visualize a Beads JSONL export as a DAG with React Flow and Dagre.
++Phase 1 MVP: FastAPI server with React Flow visualization for coordinating multiple Claude Code agents using Beads.
+ 
+-## Features
+-- Parse JSONL (LF/CRLF safe)
+-- DAG layout from **blocks** edges; **related** edges dotted and can nudge ordering
+-- Top-down or left-right orientation
+-- Status color scheme; hover highlights neighbors without flicker
+-- Search + status filters
+-- Group all isolated nodes into a bucket; click to fan out temporarily
+-- Built-in self-tests (parser + layout safety)
++## Architecture
++
++```
++┌─────────────────┐
++│  React Frontend │  ← React Flow dependency graph visualization
++│   (Port 3000)   │
++└────────┬────────┘
++         │
++         │ HTTP/REST
++         │
++┌────────▼────────┐
++│ FastAPI Server  │  ← /api/status, /api/claim, /api/complete
++│   (Port 8000)   │
++└────────┬────────┘
++         │
++         │ bd CLI (--no-db)
++         │
++┌────────▼────────┐
++│ .beads/         │  ← Shared task database (JSONL)
++│ issues.jsonl    │
++└─────────────────┘
++         │
++         │ curl commands
++         │
++┌────────▼────────┐
++│ Claude Agents   │  ← Multiple agents coordinate via HTTP
++└─────────────────┘
++```
++
++## Quick Start
++
++### 1. Install bd CLI
++
++```bash
++# Download latest bd release
++curl -L https://github.com/steveyegge/beads/releases/latest/download/bd-linux -o /usr/local/bin/bd
++chmod +x /usr/local/bin/bd
++```
++
++### 2. Start Backend
++
++```bash
++# Install dependencies
++pip install -r requirements.txt
++
++# Run server
++python main.py
++```
++
++Server runs on http://localhost:8000
++
++### 3. Start Frontend
++
++```bash
++cd frontend
++
++# Install dependencies
++npm install
++
++# Run dev server
++npm run dev
++```
++
++Frontend runs on http://localhost:3000
++
++### 4. Initialize Beads Project
++
++```bash
++# In your workspace directory
++bd init
++bd create "Task 1" --status ready
++bd create "Task 2" --status ready
++bd dep add task-2 task-1 --type blocks
++```
++
++## API Endpoints
++
++### GET /api/status
++
++Get project statistics.
++
++```bash
++curl http://localhost:8000/api/status
++```
++
++Response:
++```json
++{
++  "total": 18,
++  "ready": 5,
++  "in_progress": 2,
++  "completed": 11
++}
++```
++
++### GET /api/ready
++
++Get tasks ready to be claimed.
++
++```bash
++curl http://localhost:8000/api/ready
++```
++
++Response:
++```json
++{
++  "tasks": [
++    {
++      "id": "padai-4",
++      "title": "GET /api/status endpoint",
++      "status": "ready"
++    }
++  ]
++}
++```
++
++### GET /api/tasks
++
++Get all tasks with dependencies (for visualization).
++
++```bash
++curl http://localhost:8000/api/tasks
++```
++
++Response:
++```json
++{
++  "tasks": [
++    {
++      "id": "padai-1",
++      "title": "Design PadAI architecture",
++      "status": "completed",
++      "dependencies": []
++    },
++    {
++      "id": "padai-2",
++      "title": "Create server structure",
++      "status": "in_progress",
++      "assignee": "agent-1",
++      "dependencies": [
++        {
++          "issue_id": "padai-2",
++          "depends_on_id": "padai-1",
++          "type": "blocks"
++        }
++      ]
++    }
++  ]
++}
++```
++
++### POST /api/claim
++
++Claim next available task for an agent.
++
++```bash
++curl -X POST http://localhost:8000/api/claim \
++  -H "Content-Type: application/json" \
++  -d '{"agent_name": "agent-1"}'
++```
++
++Response:
++```json
++{
++  "task": {
++    "id": "padai-4",
++    "title": "GET /api/status endpoint",
++    "status": "in_progress",
++    "assignee": "agent-1"
++  }
++}
++```
++
++### POST /api/complete
++
++Mark a task as completed.
+ 
+-## Quickstart
+ ```bash
+-pnpm i   # or npm i / yarn
+-pnpm dev # or npm run dev
++curl -X POST http://localhost:8000/api/complete \
++  -H "Content-Type: application/json" \
++  -d '{"task_id": "padai-4"}'
+ ```
+ 
+-Then open the local URL Vite prints. Load your `.jsonl` or click **Load demo**.
++Response:
++```json
++{
++  "success": true,
++  "task_id": "padai-4"
++}
++```
++
++## Agent Workflow (curl)
++
++Example workflow for a Claude Code agent:
++
++```bash
++#!/bin/bash
++
++AGENT_NAME="agent-1"
++API_URL="http://localhost:8000"
++
++# 1. Check status
++echo "Checking project status..."
++curl -s $API_URL/api/status | jq
++
++# 2. Claim next task
++echo "Claiming next task..."
++TASK=$(curl -s -X POST $API_URL/api/claim \
++  -H "Content-Type: application/json" \
++  -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++TASK_ID=$(echo $TASK | jq -r '.task.id')
++TASK_TITLE=$(echo $TASK | jq -r '.task.title')
++
++echo "Claimed: $TASK_ID - $TASK_TITLE"
++
++# 3. Do the work
++echo "Working on task..."
++# ... implement the task ...
++
++# 4. Mark as complete
++echo "Completing task..."
++curl -s -X POST $API_URL/api/complete \
++  -H "Content-Type: application/json" \
++  -d "{\"task_id\": \"$TASK_ID\"}" | jq
++
++echo "Done!"
++```
++
++## Environment Variables
++
++- `WORKSPACE_PATH`: Path to directory containing `.beads/` folder (default: `/workspace`)
++- `VITE_API_URL`: API URL for frontend (default: `http://localhost:8000`)
++
++## Deployment
++
++### Railway
++
++1. Create `railway.json`:
++
++```json
++{
++  "build": {
++    "builder": "DOCKERFILE",
++    "dockerfilePath": "Dockerfile"
++  },
++  "deploy": {
++    "startCommand": "python main.py",
++    "healthcheckPath": "/",
++    "restartPolicyType": "ON_FAILURE"
++  }
++}
++```
++
++2. Deploy:
++
++```bash
++railway up
++```
++
++### Docker
++
++```bash
++# Build
++docker build -t padai-server .
++
++# Run
++docker run -p 8000:8000 \
++  -v /path/to/workspace:/workspace \
++  padai-server
++```
++
++## Phase 2 Roadmap
++
++Future enhancements (not in Phase 1):
++
++- [ ] Remote MCP instead of curl
++- [ ] Agent Mail for inter-agent communication
++- [ ] Integration with beads-mcp tools
++- [ ] WebSocket for real-time updates
++- [ ] Telegram bot integration
++- [ ] Authentication & multi-tenancy
++
++## License
+ 
+-## Notes
+-- Tailwind is optional. We use utility-like class names but the UI works fine without Tailwind.
+-- If you want Tailwind styles, add Tailwind to the project as usual.
++MIT
+diff --git a/beads.py b/beads.py
+new file mode 100644
+index 0000000..d7b7001
+--- /dev/null
++++ b/beads.py
+@@ -0,0 +1,224 @@
++"""
++Wrapper for bd CLI commands using --no-db mode.
++"""
++import subprocess
++import json
++from typing import Dict, List, Optional, Any
++
++
++class BeadsError(Exception):
++    """Exception raised when bd command fails."""
++    pass
++
++
++def execute_bd(args: List[str], cwd: str = "/workspace") -> str:
++    """
++    Execute bd command with --no-db flag.
++
++    Args:
++        args: Command arguments to pass to bd
++        cwd: Working directory (should contain .beads/ folder)
++
++    Returns:
++        stdout from the command
++
++    Raises:
++        BeadsError: If command fails or times out
++    """
++    cmd = ["bd", "--no-db"] + args
++
++    try:
++        result = subprocess.run(
++            cmd,
++            cwd=cwd,
++            capture_output=True,
++            text=True,
++            timeout=10
++        )
++
++        if result.returncode != 0:
++            raise BeadsError(f"bd command failed: {result.stderr}")
++
++        return result.stdout.strip()
++
++    except subprocess.TimeoutExpired:
++        raise BeadsError("bd command timed out after 10s")
++    except FileNotFoundError:
++        raise BeadsError("bd CLI not found. Install from https://github.com/steveyegge/beads")
++
++
++def get_status(cwd: str = "/workspace") -> Dict[str, Any]:
++    """
++    Get current Beads project status.
++
++    Returns dict with:
++    - total: total issues
++    - ready: ready to work
++    - in_progress: currently in progress
++    - completed: done
++    """
++    output = execute_bd(["status"], cwd)
++
++    # Parse status output
++    # Example format:
++    #   Total Issues:      18
++    #   Open:              18
++    #   In Progress:       0
++    #   Closed:            0
++    #   Ready to Work:     0
++    status = {
++        "total": 0,
++        "ready": 0,
++        "in_progress": 0,
++        "completed": 0
++    }
++
++    for line in output.split('\n'):
++        line = line.strip()
++        if 'Total Issues:' in line:
++            status['total'] = int(line.split(':')[1].strip())
++        elif 'Ready to Work:' in line:
++            status['ready'] = int(line.split(':')[1].strip())
++        elif 'In Progress:' in line:
++            status['in_progress'] = int(line.split(':')[1].strip())
++        elif 'Closed:' in line:
++            status['completed'] = int(line.split(':')[1].strip())
++
++    return status
++
++
++def get_ready_tasks(cwd: str = "/workspace") -> List[Dict[str, Any]]:
++    """
++    Get list of tasks that are ready to work on.
++
++    Returns list of task dicts with id, title, status, etc.
++    """
++    output = execute_bd(["ready"], cwd)
++
++    tasks = []
++    for line in output.split('\n'):
++        line = line.strip()
++        # Skip empty lines and headers
++        if not line or line.startswith('📋') or line.startswith('#'):
++            continue
++
++        # Parse format: "1. [P0] padai-10: Deploy to Railway"
++        if '. [P' in line and ':' in line:
++            # Extract task ID and title after the colon
++            try:
++                # Split on colon to separate "ID" from "title"
++                parts = line.split(':', 1)
++                if len(parts) >= 2:
++                    # Extract ID from "1. [P0] padai-10"
++                    id_part = parts[0].strip()
++                    # Get the last word which should be the task ID
++                    task_id = id_part.split()[-1]
++                    # Get the title (everything after the colon)
++                    title = parts[1].strip()
++
++                    tasks.append({
++                        "id": task_id,
++                        "title": title,
++                        "status": "ready"
++                    })
++            except:
++                continue
++
++    return tasks
++
++
++def get_all_tasks(cwd: str = "/workspace") -> List[Dict[str, Any]]:
++    """
++    Get all tasks with full details including dependencies.
++
++    Returns list of task dicts parsed from JSONL.
++    """
++    import os
++
++    jsonl_path = os.path.join(cwd, ".beads", "issues.jsonl")
++
++    if not os.path.exists(jsonl_path):
++        return []
++
++    tasks = []
++    with open(jsonl_path, 'r') as f:
++        for line in f:
++            line = line.strip()
++            if line:
++                try:
++                    task = json.loads(line)
++                    tasks.append(task)
++                except json.JSONDecodeError:
++                    continue
++
++    return tasks
++
++
++def update_task(task_id: str, status: Optional[str] = None,
++                assignee: Optional[str] = None, cwd: str = "/workspace") -> bool:
++    """
++    Update a task's status or assignee.
++
++    Args:
++        task_id: Task ID to update
++        status: New status (ready, in_progress, completed)
++        assignee: Agent name to assign to
++
++    Returns:
++        True if successful
++    """
++    try:
++        if status:
++            execute_bd(["update", task_id, "--status", status], cwd)
++
++        if assignee:
++            execute_bd(["update", task_id, "--assignee", assignee], cwd)
++
++        return True
++
++    except BeadsError:
++        return False
++
++
++def claim_task(agent_name: str, cwd: str = "/workspace") -> Optional[Dict[str, Any]]:
++    """
++    Claim the first available ready task for an agent.
++
++    Args:
++        agent_name: Name of the agent claiming the task
++
++    Returns:
++        Task dict if successful, None if no tasks available
++    """
++    ready = get_ready_tasks(cwd)
++
++    if not ready:
++        return None
++
++    task = ready[0]
++
++    # Update to in_progress and assign
++    success = update_task(task['id'], status="in_progress", assignee=agent_name, cwd=cwd)
++
++    if success:
++        # Get full task details
++        all_tasks = get_all_tasks(cwd)
++        for t in all_tasks:
++            if t.get('id') == task['id']:
++                return t
++        return task
++
++    return None
++
++
++def complete_task(task_id: str, cwd: str = "/workspace") -> bool:
++    """
++    Mark a task as completed.
++
++    Args:
++        task_id: Task ID to complete
++
++    Returns:
++        True if successful
++    """
++    return update_task(task_id, status="completed", cwd=cwd)
+diff --git a/frontend/index.html b/frontend/index.html
+new file mode 100644
+index 0000000..f525b7e
+--- /dev/null
++++ b/frontend/index.html
+@@ -0,0 +1,12 @@
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <title>PadAI Dashboard</title>
++  </head>
++  <body>
++    <div id="root"></div>
++    <script type="module" src="/src/main.tsx"></script>
++  </body>
++</html>
+diff --git a/frontend/package.json b/frontend/package.json
+new file mode 100644
+index 0000000..2c8b93d
+--- /dev/null
++++ b/frontend/package.json
+@@ -0,0 +1,25 @@
++{
++  "name": "padai-frontend",
++  "private": true,
++  "version": "0.1.0",
++  "type": "module",
++  "scripts": {
++    "dev": "vite",
++    "build": "tsc && vite build",
++    "preview": "vite preview"
++  },
++  "dependencies": {
++    "react": "^18.2.0",
++    "react-dom": "^18.2.0",
++    "reactflow": "^11.10.1",
++    "dagre": "^0.8.5"
++  },
++  "devDependencies": {
++    "@types/react": "^18.2.43",
++    "@types/react-dom": "^18.2.17",
++    "@types/dagre": "^0.7.52",
++    "@vitejs/plugin-react": "^4.2.1",
++    "typescript": "^5.2.2",
++    "vite": "^5.0.8"
++  }
++}
+diff --git a/frontend/src/App.css b/frontend/src/App.css
+new file mode 100644
+index 0000000..9583aab
+--- /dev/null
++++ b/frontend/src/App.css
+@@ -0,0 +1,82 @@
++.app {
++  width: 100%;
++  height: 100%;
++  display: flex;
++  flex-direction: column;
++}
++
++.header {
++  background: #111;
++  border-bottom: 1px solid #333;
++  padding: 1rem 2rem;
++}
++
++.header h1 {
++  font-size: 1.5rem;
++  margin-bottom: 1rem;
++  color: #fff;
++}
++
++.status-bar {
++  display: flex;
++  gap: 2rem;
++}
++
++.status-item {
++  display: flex;
++  gap: 0.5rem;
++  align-items: center;
++}
++
++.status-item .label {
++  color: #999;
++  font-size: 0.9rem;
++}
++
++.status-item .value {
++  font-size: 1.2rem;
++  font-weight: bold;
++  color: #fff;
++}
++
++.status-item.ready .value {
++  color: #4ade80;
++}
++
++.status-item.in-progress .value {
++  color: #fbbf24;
++}
++
++.status-item.completed .value {
++  color: #60a5fa;
++}
++
++.main {
++  flex: 1;
++  position: relative;
++  overflow: hidden;
++}
++
++.loading,
++.error {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  justify-content: center;
++  height: 100%;
++  gap: 1rem;
++}
++
++.error button {
++  padding: 0.5rem 1rem;
++  background: #3b82f6;
++  color: white;
++  border: none;
++  border-radius: 0.25rem;
++  cursor: pointer;
++  font-size: 1rem;
++}
++
++.error button:hover {
++  background: #2563eb;
++}
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+new file mode 100644
+index 0000000..7d8e758
+--- /dev/null
++++ b/frontend/src/App.tsx
+@@ -0,0 +1,102 @@
++import { useEffect, useState } from 'react'
++import TaskGraph from './components/TaskGraph'
++import { Task, Status } from './types'
++import './App.css'
++
++const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
++
++function App() {
++  const [tasks, setTasks] = useState<Task[]>([])
++  const [status, setStatus] = useState<Status | null>(null)
++  const [loading, setLoading] = useState(true)
++  const [error, setError] = useState<string | null>(null)
++
++  const fetchData = async () => {
++    try {
++      setLoading(true)
++      setError(null)
++
++      // Fetch tasks and status in parallel
++      const [tasksRes, statusRes] = await Promise.all([
++        fetch(`${API_URL}/api/tasks`),
++        fetch(`${API_URL}/api/status`)
++      ])
++
++      if (!tasksRes.ok || !statusRes.ok) {
++        throw new Error('Failed to fetch data')
++      }
++
++      const tasksData = await tasksRes.json()
++      const statusData = await statusRes.json()
++
++      setTasks(tasksData.tasks || [])
++      setStatus(statusData)
++    } catch (err) {
++      setError(err instanceof Error ? err.message : 'Unknown error')
++    } finally {
++      setLoading(false)
++    }
++  }
++
++  useEffect(() => {
++    fetchData()
++
++    // Poll every 5 seconds
++    const interval = setInterval(fetchData, 5000)
++    return () => clearInterval(interval)
++  }, [])
++
++  if (loading && !tasks.length) {
++    return (
++      <div className="app">
++        <div className="loading">Loading...</div>
++      </div>
++    )
++  }
++
++  if (error) {
++    return (
++      <div className="app">
++        <div className="error">
++          <h2>Error</h2>
++          <p>{error}</p>
++          <button onClick={fetchData}>Retry</button>
++        </div>
++      </div>
++    )
++  }
++
++  return (
++    <div className="app">
++      <header className="header">
++        <h1>PadAI Dashboard</h1>
++        {status && (
++          <div className="status-bar">
++            <div className="status-item">
++              <span className="label">Total:</span>
++              <span className="value">{status.total}</span>
++            </div>
++            <div className="status-item ready">
++              <span className="label">Ready:</span>
++              <span className="value">{status.ready}</span>
++            </div>
++            <div className="status-item in-progress">
++              <span className="label">In Progress:</span>
++              <span className="value">{status.in_progress}</span>
++            </div>
++            <div className="status-item completed">
++              <span className="label">Completed:</span>
++              <span className="value">{status.completed}</span>
++            </div>
++          </div>
++        )}
++      </header>
++
++      <main className="main">
++        <TaskGraph tasks={tasks} />
++      </main>
++    </div>
++  )
++}
++
++export default App
+diff --git a/frontend/src/components/TaskGraph.css b/frontend/src/components/TaskGraph.css
+new file mode 100644
+index 0000000..c2efb7b
+--- /dev/null
++++ b/frontend/src/components/TaskGraph.css
+@@ -0,0 +1,132 @@
++.task-graph {
++  width: 100%;
++  height: 100%;
++}
++
++.task-card {
++  background: #1a1a1a;
++  border: 2px solid #333;
++  border-radius: 8px;
++  padding: 12px;
++  width: 100%;
++  height: 100%;
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  transition: all 0.2s;
++}
++
++.task-card:hover {
++  border-color: #555;
++  transform: scale(1.02);
++}
++
++.task-card.status-completed {
++  border-color: #60a5fa;
++  background: #1e3a5f;
++}
++
++.task-card.status-in_progress {
++  border-color: #fbbf24;
++  background: #4a3a1a;
++}
++
++.task-card.status-ready {
++  border-color: #4ade80;
++  background: #1a3a2a;
++}
++
++.task-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++}
++
++.task-id {
++  font-size: 0.75rem;
++  color: #999;
++  font-family: monospace;
++}
++
++.task-status {
++  font-size: 1rem;
++}
++
++.task-status.status-completed {
++  color: #60a5fa;
++}
++
++.task-status.status-in_progress {
++  color: #fbbf24;
++}
++
++.task-status.status-ready {
++  color: #4ade80;
++}
++
++.task-title {
++  font-size: 0.9rem;
++  line-height: 1.3;
++  color: #fff;
++  flex: 1;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  display: -webkit-box;
++  -webkit-line-clamp: 2;
++  -webkit-box-orient: vertical;
++}
++
++.task-assignee {
++  font-size: 0.75rem;
++  color: #999;
++  margin-top: auto;
++}
++
++.empty-state {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  height: 100%;
++  color: #666;
++}
++
++/* React Flow customization */
++.react-flow__node {
++  border-radius: 8px;
++}
++
++.react-flow__edge-path {
++  stroke: #555;
++}
++
++.react-flow__edge.animated .react-flow__edge-path {
++  stroke: #4ade80;
++  stroke-dasharray: 5;
++  animation: dashdraw 0.5s linear infinite;
++}
++
++@keyframes dashdraw {
++  to {
++    stroke-dashoffset: -10;
++  }
++}
++
++.react-flow__controls {
++  background: #1a1a1a;
++  border: 1px solid #333;
++}
++
++.react-flow__controls button {
++  background: #1a1a1a;
++  border-bottom: 1px solid #333;
++  color: #fff;
++}
++
++.react-flow__controls button:hover {
++  background: #2a2a2a;
++}
++
++.react-flow__minimap {
++  background: #1a1a1a;
++  border: 1px solid #333;
++}
+diff --git a/frontend/src/components/TaskGraph.tsx b/frontend/src/components/TaskGraph.tsx
+new file mode 100644
+index 0000000..ec3f5af
+--- /dev/null
++++ b/frontend/src/components/TaskGraph.tsx
+@@ -0,0 +1,179 @@
++import { useCallback, useMemo } from 'react'
++import ReactFlow, {
++  Node,
++  Edge,
++  Background,
++  Controls,
++  MiniMap,
++  useNodesState,
++  useEdgesState,
++  MarkerType,
++} from 'reactflow'
++import dagre from 'dagre'
++import { Task } from '../types'
++import 'reactflow/dist/style.css'
++import './TaskGraph.css'
++
++interface TaskGraphProps {
++  tasks: Task[]
++}
++
++const nodeWidth = 250
++const nodeHeight = 80
++
++// Layout tasks using dagre
++const getLayoutedElements = (tasks: Task[]) => {
++  const dagreGraph = new dagre.graphlib.Graph()
++  dagreGraph.setDefaultEdgeLabel(() => ({}))
++  dagreGraph.setGraph({ rankdir: 'TB', nodesep: 100, ranksep: 100 })
++
++  const nodes: Node[] = []
++  const edges: Edge[] = []
++
++  // Create nodes
++  tasks.forEach((task) => {
++    const status = task.status || 'pending'
++
++    const node: Node = {
++      id: task.id,
++      data: {
++        label: task.title,
++        status,
++        assignee: task.assignee,
++        taskId: task.id,
++      },
++      position: { x: 0, y: 0 },
++      className: `task-node status-${status}`,
++      style: {
++        width: nodeWidth,
++        height: nodeHeight,
++      },
++    }
++
++    nodes.push(node)
++    dagreGraph.setNode(task.id, { width: nodeWidth, height: nodeHeight })
++  })
++
++  // Create edges from dependencies
++  tasks.forEach((task) => {
++    if (task.dependencies) {
++      task.dependencies.forEach((dep) => {
++        // Edge from depends_on -> task (depends_on blocks task)
++        const edge: Edge = {
++          id: `${dep.depends_on_id}-${task.id}`,
++          source: dep.depends_on_id,
++          target: task.id,
++          type: 'smoothstep',
++          animated: task.status === 'ready',
++          label: dep.type === 'blocks' ? '🔒' : '',
++          markerEnd: {
++            type: MarkerType.ArrowClosed,
++            width: 20,
++            height: 20,
++          },
++          style: {
++            strokeWidth: 2,
++          },
++        }
++
++        edges.push(edge)
++        dagreGraph.setEdge(dep.depends_on_id, task.id)
++      })
++    }
++  })
++
++  // Calculate layout
++  dagre.layout(dagreGraph)
++
++  // Apply positions
++  nodes.forEach((node) => {
++    const nodeWithPosition = dagreGraph.node(node.id)
++    node.position = {
++      x: nodeWithPosition.x - nodeWidth / 2,
++      y: nodeWithPosition.y - nodeHeight / 2,
++    }
++  })
++
++  return { nodes, edges }
++}
++
++// Custom node component
++const TaskNode = ({ data }: { data: any }) => {
++  const { label, status, assignee, taskId } = data
++
++  return (
++    <div className={`task-card status-${status}`}>
++      <div className="task-header">
++        <span className="task-id">{taskId}</span>
++        <span className={`task-status status-${status}`}>
++          {status === 'completed' ? '✓' : status === 'in_progress' ? '⚙' : '○'}
++        </span>
++      </div>
++      <div className="task-title">{label}</div>
++      {assignee && (
++        <div className="task-assignee">
++          👤 {assignee}
++        </div>
++      )}
++    </div>
++  )
++}
++
++const nodeTypes = {
++  default: TaskNode,
++}
++
++export default function TaskGraph({ tasks }: TaskGraphProps) {
++  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(
++    () => getLayoutedElements(tasks),
++    [tasks]
++  )
++
++  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes)
++  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges)
++
++  // Update nodes when tasks change
++  useMemo(() => {
++    setNodes(layoutedNodes)
++    setEdges(layoutedEdges)
++  }, [layoutedNodes, layoutedEdges, setNodes, setEdges])
++
++  if (!tasks.length) {
++    return (
++      <div className="empty-state">
++        <p>No tasks found</p>
++      </div>
++    )
++  }
++
++  return (
++    <div className="task-graph">
++      <ReactFlow
++        nodes={nodes}
++        edges={edges}
++        onNodesChange={onNodesChange}
++        onEdgesChange={onEdgesChange}
++        nodeTypes={nodeTypes}
++        fitView
++        minZoom={0.1}
++        maxZoom={2}
++      >
++        <Background color="#333" gap={16} />
++        <Controls />
++        <MiniMap
++          nodeColor={(node) => {
++            const status = node.className?.includes('completed')
++              ? '#60a5fa'
++              : node.className?.includes('in_progress')
++              ? '#fbbf24'
++              : node.className?.includes('ready')
++              ? '#4ade80'
++              : '#6b7280'
++            return status
++          }}
++          maskColor="rgba(0, 0, 0, 0.8)"
++        />
++      </ReactFlow>
++    </div>
++  )
++}
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+new file mode 100644
+index 0000000..15e353b
+--- /dev/null
++++ b/frontend/src/index.css
+@@ -0,0 +1,20 @@
++* {
++  margin: 0;
++  padding: 0;
++  box-sizing: border-box;
++}
++
++body {
++  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
++    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
++    sans-serif;
++  -webkit-font-smoothing: antialiased;
++  -moz-osx-font-smoothing: grayscale;
++  background: #0a0a0a;
++  color: #fff;
++}
++
++#root {
++  width: 100vw;
++  height: 100vh;
++}
+diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
+new file mode 100644
+index 0000000..964aeb4
+--- /dev/null
++++ b/frontend/src/main.tsx
+@@ -0,0 +1,10 @@
++import React from 'react'
++import ReactDOM from 'react-dom/client'
++import App from './App'
++import './index.css'
++
++ReactDOM.createRoot(document.getElementById('root')!).render(
++  <React.StrictMode>
++    <App />
++  </React.StrictMode>,
++)
+diff --git a/frontend/src/types.ts b/frontend/src/types.ts
+new file mode 100644
+index 0000000..f40d2b3
+--- /dev/null
++++ b/frontend/src/types.ts
+@@ -0,0 +1,20 @@
++export interface Task {
++  id: string;
++  title: string;
++  status?: string;
++  assignee?: string;
++  dependencies?: Dependency[];
++}
++
++export interface Dependency {
++  issue_id: string;
++  depends_on_id: string;
++  type: 'blocks' | 'related' | 'parent' | 'discovered-from';
++}
++
++export interface Status {
++  total: number;
++  ready: number;
++  in_progress: number;
++  completed: number;
++}
+diff --git a/frontend/tsconfig.json b/frontend/tsconfig.json
+new file mode 100644
+index 0000000..3934b8f
+--- /dev/null
++++ b/frontend/tsconfig.json
+@@ -0,0 +1,21 @@
++{
++  "compilerOptions": {
++    "target": "ES2020",
++    "useDefineForClassFields": true,
++    "lib": ["ES2020", "DOM", "DOM.Iterable"],
++    "module": "ESNext",
++    "skipLibCheck": true,
++    "moduleResolution": "bundler",
++    "allowImportingTsExtensions": true,
++    "resolveJsonModule": true,
++    "isolatedModules": true,
++    "noEmit": true,
++    "jsx": "react-jsx",
++    "strict": true,
++    "noUnusedLocals": true,
++    "noUnusedParameters": true,
++    "noFallthroughCasesInSwitch": true
++  },
++  "include": ["src"],
++  "references": [{ "path": "./tsconfig.node.json" }]
++}
+diff --git a/frontend/tsconfig.node.json b/frontend/tsconfig.node.json
+new file mode 100644
+index 0000000..42872c5
+--- /dev/null
++++ b/frontend/tsconfig.node.json
+@@ -0,0 +1,10 @@
++{
++  "compilerOptions": {
++    "composite": true,
++    "skipLibCheck": true,
++    "module": "ESNext",
++    "moduleResolution": "bundler",
++    "allowSyntheticDefaultImports": true
++  },
++  "include": ["vite.config.ts"]
++}
+diff --git a/frontend/vite.config.ts b/frontend/vite.config.ts
+new file mode 100644
+index 0000000..b9065d2
+--- /dev/null
++++ b/frontend/vite.config.ts
+@@ -0,0 +1,15 @@
++import { defineConfig } from 'vite'
++import react from '@vitejs/plugin-react'
++
++export default defineConfig({
++  plugins: [react()],
++  server: {
++    port: 3000,
++    proxy: {
++      '/api': {
++        target: 'http://localhost:8000',
++        changeOrigin: true,
++      }
++    }
++  }
++})
+diff --git a/main.py b/main.py
+new file mode 100644
+index 0000000..f543234
+--- /dev/null
++++ b/main.py
+@@ -0,0 +1,192 @@
++"""
++PadAI Master Server - Phase 1 MVP
++FastAPI server for multi-agent Beads coordination.
++"""
++from fastapi import FastAPI, HTTPException
++from fastapi.middleware.cors import CORSMiddleware
++from fastapi.staticfiles import StaticFiles
++from pydantic import BaseModel
++from typing import List, Dict, Any, Optional
++import os
++
++from beads import (
++    get_status,
++    get_ready_tasks,
++    get_all_tasks,
++    claim_task,
++    complete_task,
++    BeadsError
++)
++
++app = FastAPI(title="PadAI Master Server", version="0.1.0")
++
++# CORS for React frontend
++app.add_middleware(
++    CORSMiddleware,
++    allow_origins=["*"],  # In production, specify your frontend domain
++    allow_credentials=True,
++    allow_methods=["*"],
++    allow_headers=["*"],
++)
++
++# Workspace path (should contain .beads/ folder)
++WORKSPACE = os.getenv("WORKSPACE_PATH", "/workspace")
++
++
++# Request/Response models
++class ClaimRequest(BaseModel):
++    agent_name: str
++
++
++class CompleteRequest(BaseModel):
++    task_id: str
++
++
++class StatusResponse(BaseModel):
++    total: int
++    ready: int
++    in_progress: int
++    completed: int
++
++
++# Endpoints
++
++@app.get("/")
++async def root():
++    """Health check endpoint."""
++    return {"status": "ok", "service": "PadAI Master Server"}
++
++
++@app.get("/api/status", response_model=StatusResponse)
++async def api_status():
++    """
++    Get current project status with task counts.
++
++    Example response:
++    {
++        "total": 18,
++        "ready": 5,
++        "in_progress": 2,
++        "completed": 11
++    }
++    """
++    try:
++        status = get_status(WORKSPACE)
++        return StatusResponse(**status)
++    except BeadsError as e:
++        raise HTTPException(status_code=500, detail=str(e))
++
++
++@app.get("/api/ready")
++async def api_ready():
++    """
++    Get list of tasks ready to be claimed.
++
++    Example response:
++    [
++        {"id": "padai-4", "title": "GET /api/status endpoint", "status": "ready"}
++    ]
++    """
++    try:
++        tasks = get_ready_tasks(WORKSPACE)
++        return {"tasks": tasks}
++    except BeadsError as e:
++        raise HTTPException(status_code=500, detail=str(e))
++
++
++@app.get("/api/tasks")
++async def api_tasks():
++    """
++    Get all tasks with full details including dependencies.
++
++    Used by React Flow visualization to build dependency graph.
++
++    Example response:
++    {
++        "tasks": [
++            {
++                "id": "padai-1",
++                "title": "Design PadAI architecture",
++                "status": "completed",
++                "dependencies": [...]
++            }
++        ]
++    }
++    """
++    try:
++        tasks = get_all_tasks(WORKSPACE)
++        return {"tasks": tasks}
++    except BeadsError as e:
++        raise HTTPException(status_code=500, detail=str(e))
++
++
++@app.post("/api/claim")
++async def api_claim(request: ClaimRequest):
++    """
++    Claim the next available task for an agent.
++
++    Request body:
++    {
++        "agent_name": "agent-1"
++    }
++
++    Response:
++    {
++        "task": {
++            "id": "padai-4",
++            "title": "GET /api/status endpoint",
++            "status": "in_progress",
++            "assignee": "agent-1"
++        }
++    }
++
++    Returns 404 if no tasks are ready.
++    """
++    try:
++        task = claim_task(request.agent_name, WORKSPACE)
++
++        if task is None:
++            raise HTTPException(status_code=404, detail="No tasks available")
++
++        return {"task": task}
++
++    except BeadsError as e:
++        raise HTTPException(status_code=500, detail=str(e))
++
++
++@app.post("/api/complete")
++async def api_complete(request: CompleteRequest):
++    """
++    Mark a task as completed.
++
++    Request body:
++    {
++        "task_id": "padai-4"
++    }
++
++    Response:
++    {
++        "success": true,
++        "task_id": "padai-4"
++    }
++    """
++    try:
++        success = complete_task(request.task_id, WORKSPACE)
++
++        if not success:
++            raise HTTPException(status_code=500, detail="Failed to complete task")
++
++        return {"success": True, "task_id": request.task_id}
++
++    except BeadsError as e:
++        raise HTTPException(status_code=500, detail=str(e))
++
++
++# Serve React frontend (if built)
++if os.path.exists("frontend/dist"):
++    app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
++
++
++if __name__ == "__main__":
++    import uvicorn
++    uvicorn.run(app, host="0.0.0.0", port=8000)
+diff --git a/railway.json b/railway.json
+new file mode 100644
+index 0000000..6d253ba
+--- /dev/null
++++ b/railway.json
+@@ -0,0 +1,14 @@
++{
++  "$schema": "https://railway.app/railway.schema.json",
++  "build": {
++    "builder": "DOCKERFILE",
++    "dockerfilePath": "Dockerfile"
++  },
++  "deploy": {
++    "startCommand": "python main.py",
++    "healthcheckPath": "/",
++    "restartPolicyType": "ON_FAILURE",
++    "healthcheckTimeout": 100,
++    "sleepApplication": false
++  }
++}
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..7136501
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,4 @@
++fastapi==0.104.1
++uvicorn[standard]==0.24.0
++pydantic==2.5.0
++python-dotenv==1.0.0
+diff --git a/test-agent.sh b/test-agent.sh
+new file mode 100755
+index 0000000..0c21a4e
+--- /dev/null
++++ b/test-agent.sh
+@@ -0,0 +1,62 @@
++#!/bin/bash
++# Test script to simulate agent workflow
++
++set -e
++
++AGENT_NAME="${1:-agent-test}"
++API_URL="${2:-http://localhost:8000}"
++
++echo "🤖 Agent: $AGENT_NAME"
++echo "🌐 API: $API_URL"
++echo ""
++
++# Check server health
++echo "1️⃣  Checking server health..."
++curl -s $API_URL/ | jq
++echo ""
++
++# Get status
++echo "2️⃣  Getting project status..."
++STATUS=$(curl -s $API_URL/api/status)
++echo $STATUS | jq
++echo ""
++
++READY_COUNT=$(echo $STATUS | jq -r '.ready')
++if [ "$READY_COUNT" -eq 0 ]; then
++    echo "❌ No tasks ready to claim"
++    exit 0
++fi
++
++# Claim task
++echo "3️⃣  Claiming next task..."
++TASK=$(curl -s -X POST $API_URL/api/claim \
++  -H "Content-Type: application/json" \
++  -d "{\"agent_name\": \"$AGENT_NAME\"}")
++
++TASK_ID=$(echo $TASK | jq -r '.task.id')
++TASK_TITLE=$(echo $TASK | jq -r '.task.title')
++
++echo "✅ Claimed: $TASK_ID - $TASK_TITLE"
++echo ""
++
++# Simulate work
++echo "4️⃣  Working on task..."
++sleep 2
++echo "✅ Task implementation complete"
++echo ""
++
++# Complete task
++echo "5️⃣  Marking task as completed..."
++COMPLETE=$(curl -s -X POST $API_URL/api/complete \
++  -H "Content-Type: application/json" \
++  -d "{\"task_id\": \"$TASK_ID\"}")
++
++echo $COMPLETE | jq
++echo ""
++
++# Final status
++echo "6️⃣  Final project status..."
++curl -s $API_URL/api/status | jq
++echo ""
++
++echo "🎉 Agent workflow completed successfully!"
+-- 
+2.43.0
+

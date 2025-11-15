@@ -1,0 +1,509 @@
+From 338185b87f8d76ebf108a75ee88525030c4323b1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 15 Nov 2025 08:41:09 +0000
+Subject: [PATCH 2/6] Implement PadAI Master Server core functionality (padai-2
+ through padai-6)
+
+Completed tasks:
+- padai-2: Initialize server project structure
+  * package.json with Express dependencies
+  * tsconfig.json for TypeScript
+  * Basic Express app skeleton
+
+- padai-3: Implement bd CLI wrapper utility (server/src/beads.ts)
+  * executeBd() function using child_process.spawn
+  * getStatus() - get all tasks
+  * getReadyTasks() - get tasks with no blockers
+  * updateTask() - update status/assignee/notes
+  * Proper error handling and timeouts
+
+- padai-4: GET /api/status endpoint
+  * Returns all tasks with current status
+  * JSON response with task count
+
+- padai-5: POST /api/claim endpoint
+  * Claims next ready task for agent
+  * Validates agentName input
+  * Updates task to in_progress
+  * Returns 404 if no tasks ready
+
+- padai-6: POST /api/complete endpoint
+  * Marks task as completed
+  * Validates taskId input
+  * Optional notes field
+  * Returns 404 if task not found
+
+Server ready for local testing! Next: Error handling (padai-7) and Docker (padai-8)
+---
+ server/.gitignore    |   5 ++
+ server/README.md     |  51 +++++++++++++
+ server/package.json  |  27 +++++++
+ server/src/beads.ts  | 149 ++++++++++++++++++++++++++++++++++++++
+ server/src/index.ts  | 167 +++++++++++++++++++++++++++++++++++++++++++
+ server/tsconfig.json |  20 ++++++
+ 6 files changed, 419 insertions(+)
+ create mode 100644 server/.gitignore
+ create mode 100644 server/README.md
+ create mode 100644 server/package.json
+ create mode 100644 server/src/beads.ts
+ create mode 100644 server/src/index.ts
+ create mode 100644 server/tsconfig.json
+
+diff --git a/server/.gitignore b/server/.gitignore
+new file mode 100644
+index 0000000..397b0d9
+--- /dev/null
++++ b/server/.gitignore
+@@ -0,0 +1,5 @@
++node_modules/
++dist/
++*.log
++.env
++.DS_Store
+diff --git a/server/README.md b/server/README.md
+new file mode 100644
+index 0000000..f0b7ba3
+--- /dev/null
++++ b/server/README.md
+@@ -0,0 +1,51 @@
++# PadAI Master Server
++
++Lightweight Express API that wraps `bd` CLI to enable multi-agent coordination.
++
++## Quick Start
++
++```bash
++# Install dependencies
++npm install
++
++# Run in development mode
++npm run dev
++
++# Build for production
++npm run build
++npm start
++```
++
++## API Endpoints
++
++### GET /health
++Health check endpoint
++
++### GET /api/status
++Returns current Beads task status (wraps `bd status --json`)
++
++### POST /api/claim
++Claims next ready task for an agent
++```json
++{
++  "agentName": "architect"
++}
++```
++
++### POST /api/complete
++Marks task as completed
++```json
++{
++  "taskId": "padai-2",
++  "notes": "Server initialization complete"
++}
++```
++
++## Environment Variables
++
++- `PORT` - Server port (default: 3000)
++- `BEADS_PATH` - Path to project with `.beads/` folder (default: current directory)
++
++## Development
++
++The server wraps the `bd` CLI using Node's `child_process.spawn()`. Make sure `bd` is installed and in your PATH.
+diff --git a/server/package.json b/server/package.json
+new file mode 100644
+index 0000000..beb7314
+--- /dev/null
++++ b/server/package.json
+@@ -0,0 +1,27 @@
++{
++  "name": "padai-master",
++  "version": "0.1.0",
++  "description": "PadAI Master Server - Multi-agent orchestration via Beads",
++  "main": "dist/index.js",
++  "type": "module",
++  "scripts": {
++    "dev": "node --loader ts-node/esm src/index.ts",
++    "build": "tsc",
++    "start": "node dist/index.js",
++    "test": "echo \"Error: no test specified\" && exit 1"
++  },
++  "keywords": ["beads", "multi-agent", "orchestration", "padai"],
++  "author": "PadAI",
++  "license": "MIT",
++  "dependencies": {
++    "express": "^4.18.2",
++    "cors": "^2.8.5"
++  },
++  "devDependencies": {
++    "@types/express": "^4.17.21",
++    "@types/cors": "^2.8.17",
++    "@types/node": "^20.10.0",
++    "typescript": "^5.3.3",
++    "ts-node": "^10.9.2"
++  }
++}
+diff --git a/server/src/beads.ts b/server/src/beads.ts
+new file mode 100644
+index 0000000..65a188b
+--- /dev/null
++++ b/server/src/beads.ts
+@@ -0,0 +1,149 @@
++// Beads CLI Wrapper
++// Spawns bd commands and returns parsed output
++
++import { spawn } from 'child_process';
++
++export interface BeadsIssue {
++  id: string;
++  title: string;
++  description?: string;
++  status: 'open' | 'in_progress' | 'blocked' | 'closed';
++  priority: number;
++  issue_type: string;
++  assignee?: string;
++  dependencies?: Array<{
++    issue_id: string;
++    depends_on_id: string;
++    type: string;
++  }>;
++}
++
++export interface BeadsExecuteOptions {
++  cwd?: string;
++  timeout?: number;
++}
++
++/**
++ * Execute bd CLI command and return output
++ */
++export async function executeBd(
++  args: string[],
++  options: BeadsExecuteOptions = {}
++): Promise<string> {
++  const { cwd = process.cwd(), timeout = 10000 } = options;
++
++  return new Promise((resolve, reject) => {
++    const proc = spawn('bd', ['--no-db', ...args], {
++      cwd,
++      stdio: ['pipe', 'pipe', 'pipe']
++    });
++
++    let stdout = '';
++    let stderr = '';
++
++    proc.stdout.on('data', (data) => {
++      stdout += data.toString();
++    });
++
++    proc.stderr.on('data', (data) => {
++      stderr += data.toString();
++    });
++
++    // Timeout handling
++    const timeoutId = setTimeout(() => {
++      proc.kill('SIGTERM');
++      reject(new Error(`bd command timed out after ${timeout}ms`));
++    }, timeout);
++
++    proc.on('close', (code) => {
++      clearTimeout(timeoutId);
++
++      if (code !== 0) {
++        console.error(`bd command failed with code ${code}:`, stderr);
++        reject(new Error(`bd command failed: ${stderr || stdout}`));
++        return;
++      }
++
++      resolve(stdout.trim());
++    });
++
++    proc.on('error', (err) => {
++      clearTimeout(timeoutId);
++      reject(new Error(`Failed to spawn bd: ${err.message}`));
++    });
++  });
++}
++
++/**
++ * Get all tasks with current status
++ */
++export async function getStatus(): Promise<BeadsIssue[]> {
++  const output = await executeBd(['list', '--json']);
++
++  if (!output) {
++    return [];
++  }
++
++  try {
++    const issues = JSON.parse(output);
++    return Array.isArray(issues) ? issues : [];
++  } catch (err) {
++    console.error('Failed to parse bd output:', err);
++    throw new Error('Invalid JSON from bd list command');
++  }
++}
++
++/**
++ * Get all ready tasks (no blocking dependencies)
++ */
++export async function getReadyTasks(): Promise<BeadsIssue[]> {
++  const output = await executeBd(['ready', '--json']);
++
++  if (!output) {
++    return [];
++  }
++
++  try {
++    const issues = JSON.parse(output);
++    return Array.isArray(issues) ? issues : [];
++  } catch (err) {
++    console.error('Failed to parse bd ready output:', err);
++    throw new Error('Invalid JSON from bd ready command');
++  }
++}
++
++/**
++ * Update task status and assignee
++ */
++export async function updateTask(
++  taskId: string,
++  updates: {
++    status?: string;
++    assignee?: string;
++    notes?: string;
++  }
++): Promise<void> {
++  const args = ['update', taskId];
++
++  if (updates.status) {
++    args.push('--status', updates.status);
++  }
++
++  if (updates.assignee) {
++    args.push('--assignee', updates.assignee);
++  }
++
++  if (updates.notes) {
++    args.push('--notes', updates.notes);
++  }
++
++  await executeBd(args);
++}
++
++/**
++ * Get specific task by ID
++ */
++export async function getTask(taskId: string): Promise<BeadsIssue | null> {
++  const allTasks = await getStatus();
++  return allTasks.find(task => task.id === taskId) || null;
++}
+diff --git a/server/src/index.ts b/server/src/index.ts
+new file mode 100644
+index 0000000..63b5ac5
+--- /dev/null
++++ b/server/src/index.ts
+@@ -0,0 +1,167 @@
++// PadAI Master Server
++// Lightweight Express API wrapping bd CLI for multi-agent orchestration
++
++import express from 'express';
++import cors from 'cors';
++import { getStatus, getReadyTasks, updateTask, getTask } from './beads.js';
++
++const app = express();
++const PORT = process.env.PORT || 3000;
++
++// Middleware
++app.use(cors());
++app.use(express.json());
++
++// Health check
++app.get('/health', (req, res) => {
++  res.json({
++    status: 'ok',
++    service: 'PadAI Master Server',
++    timestamp: Date.now()
++  });
++});
++
++/**
++ * GET /api/status
++ * Returns all tasks with current status
++ */
++app.get('/api/status', async (req, res) => {
++  try {
++    const tasks = await getStatus();
++    res.json({
++      tasks,
++      count: tasks.length,
++      timestamp: Date.now()
++    });
++  } catch (error: any) {
++    console.error('GET /api/status error:', error);
++    res.status(500).json({
++      error: 'Failed to get task status',
++      message: error.message
++    });
++  }
++});
++
++/**
++ * POST /api/claim
++ * Claims the next ready task for an agent
++ * Body: { agentName: string }
++ */
++app.post('/api/claim', async (req, res) => {
++  try {
++    const { agentName } = req.body;
++
++    // Validate input
++    if (!agentName || typeof agentName !== 'string') {
++      res.status(400).json({
++        error: 'Invalid request',
++        message: 'agentName is required and must be a string'
++      });
++      return;
++    }
++
++    // Get ready tasks
++    const readyTasks = await getReadyTasks();
++
++    if (readyTasks.length === 0) {
++      res.status(404).json({
++        error: 'No tasks available',
++        message: 'No ready tasks to claim'
++      });
++      return;
++    }
++
++    // Claim first ready task (highest priority)
++    const task = readyTasks[0];
++
++    // Update to in_progress
++    await updateTask(task.id, {
++      status: 'in_progress',
++      assignee: agentName
++    });
++
++    // Get updated task
++    const updatedTask = await getTask(task.id);
++
++    res.json({
++      task: updatedTask,
++      claimed: true,
++      timestamp: Date.now()
++    });
++
++    console.log(`✓ Agent "${agentName}" claimed task ${task.id}: ${task.title}`);
++
++  } catch (error: any) {
++    console.error('POST /api/claim error:', error);
++    res.status(500).json({
++      error: 'Failed to claim task',
++      message: error.message
++    });
++  }
++});
++
++/**
++ * POST /api/complete
++ * Marks a task as completed
++ * Body: { taskId: string, notes?: string }
++ */
++app.post('/api/complete', async (req, res) => {
++  try {
++    const { taskId, notes } = req.body;
++
++    // Validate input
++    if (!taskId || typeof taskId !== 'string') {
++      res.status(400).json({
++        error: 'Invalid request',
++        message: 'taskId is required and must be a string'
++      });
++      return;
++    }
++
++    // Check if task exists
++    const task = await getTask(taskId);
++    if (!task) {
++      res.status(404).json({
++        error: 'Task not found',
++        message: `Task ${taskId} does not exist`
++      });
++      return;
++    }
++
++    // Update to completed
++    await updateTask(taskId, {
++      status: 'completed',
++      notes
++    });
++
++    res.json({
++      success: true,
++      taskId,
++      timestamp: Date.now()
++    });
++
++    console.log(`✓ Task ${taskId} marked as completed`);
++
++  } catch (error: any) {
++    console.error('POST /api/complete error:', error);
++    res.status(500).json({
++      error: 'Failed to complete task',
++      message: error.message
++    });
++  }
++});
++
++// 404 handler
++app.use((req, res) => {
++  res.status(404).json({
++    error: 'Not found',
++    message: `Route ${req.method} ${req.path} not found`
++  });
++});
++
++// Start server
++app.listen(PORT, () => {
++  console.log(`🎖️  PadAI Master Server listening on port ${PORT}`);
++  console.log(`📊 Health check: http://localhost:${PORT}/health`);
++  console.log(`📋 API Status: http://localhost:${PORT}/api/status`);
++});
+diff --git a/server/tsconfig.json b/server/tsconfig.json
+new file mode 100644
+index 0000000..6582474
+--- /dev/null
++++ b/server/tsconfig.json
+@@ -0,0 +1,20 @@
++{
++  "compilerOptions": {
++    "target": "ES2022",
++    "module": "ES2022",
++    "lib": ["ES2022"],
++    "moduleResolution": "node",
++    "outDir": "./dist",
++    "rootDir": "./src",
++    "strict": true,
++    "esModuleInterop": true,
++    "skipLibCheck": true,
++    "forceConsistentCasingInFileNames": true,
++    "resolveJsonModule": true,
++    "declaration": true,
++    "declarationMap": true,
++    "sourceMap": true
++  },
++  "include": ["src/**/*"],
++  "exclude": ["node_modules", "dist"]
++}
+-- 
+2.43.0
+

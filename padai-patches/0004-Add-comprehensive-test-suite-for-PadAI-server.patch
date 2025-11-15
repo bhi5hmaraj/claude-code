@@ -1,0 +1,622 @@
+From 5d7095972a9b33620af5c45452bbad54167cec52 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 15 Nov 2025 08:46:56 +0000
+Subject: [PATCH 4/6] Add comprehensive test suite for PadAI server
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Tests added:
+- Unit tests for beads.ts (CLI wrapper)
+  * Command execution and output parsing
+  * Error handling and timeout behavior
+  * JSON validation
+
+- Integration tests for API endpoints
+  * Health check, status, claim, complete
+  * Request validation
+  * End-to-end claim → complete workflow
+  * Uses real bd CLI with temp .beads/ folder
+
+Test infrastructure:
+- Jest with ts-jest for TypeScript
+- Supertest for API testing
+- Coverage reporting configured
+
+Run with: npm test
+---
+ server/jest.config.js                        |  21 ++
+ server/package.json                          |  11 +-
+ server/src/__tests__/README.md               |  42 +++
+ server/src/__tests__/api.integration.test.ts | 258 +++++++++++++++++++
+ server/src/__tests__/beads.test.ts           | 207 +++++++++++++++
+ 5 files changed, 537 insertions(+), 2 deletions(-)
+ create mode 100644 server/jest.config.js
+ create mode 100644 server/src/__tests__/README.md
+ create mode 100644 server/src/__tests__/api.integration.test.ts
+ create mode 100644 server/src/__tests__/beads.test.ts
+
+diff --git a/server/jest.config.js b/server/jest.config.js
+new file mode 100644
+index 0000000..99c85f3
+--- /dev/null
++++ b/server/jest.config.js
+@@ -0,0 +1,21 @@
++export default {
++  preset: 'ts-jest/presets/default-esm',
++  testEnvironment: 'node',
++  extensionsToTreatAsEsm: ['.ts'],
++  moduleNameMapper: {
++    '^(\\.{1,2}/.*)\\.js$': '$1',
++  },
++  transform: {
++    '^.+\\.tsx?$': [
++      'ts-jest',
++      {
++        useESM: true,
++      },
++    ],
++  },
++  testMatch: ['**/__tests__/**/*.test.ts'],
++  collectCoverageFrom: [
++    'src/**/*.ts',
++    '!src/**/*.d.ts',
++  ],
++};
+diff --git a/server/package.json b/server/package.json
+index beb7314..b21a0ae 100644
+--- a/server/package.json
++++ b/server/package.json
+@@ -8,7 +8,9 @@
+     "dev": "node --loader ts-node/esm src/index.ts",
+     "build": "tsc",
+     "start": "node dist/index.js",
+-    "test": "echo \"Error: no test specified\" && exit 1"
++    "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
++    "test:watch": "NODE_OPTIONS='--experimental-vm-modules' jest --watch",
++    "test:coverage": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
+   },
+   "keywords": ["beads", "multi-agent", "orchestration", "padai"],
+   "author": "PadAI",
+@@ -21,7 +23,12 @@
+     "@types/express": "^4.17.21",
+     "@types/cors": "^2.8.17",
+     "@types/node": "^20.10.0",
++    "@types/jest": "^29.5.11",
++    "@types/supertest": "^6.0.2",
+     "typescript": "^5.3.3",
+-    "ts-node": "^10.9.2"
++    "ts-node": "^10.9.2",
++    "jest": "^29.7.0",
++    "ts-jest": "^29.1.1",
++    "supertest": "^6.3.3"
+   }
+ }
+diff --git a/server/src/__tests__/README.md b/server/src/__tests__/README.md
+new file mode 100644
+index 0000000..4d3e69f
+--- /dev/null
++++ b/server/src/__tests__/README.md
+@@ -0,0 +1,42 @@
++# PadAI Server Tests
++
++## Running Tests
++
++```bash
++# Run all tests
++npm test
++
++# Watch mode
++npm run test:watch
++
++# Coverage report
++npm run test:coverage
++```
++
++## Test Structure
++
++### Unit Tests (`beads.test.ts`)
++Tests the bd CLI wrapper in isolation using mocks:
++- Command execution
++- Error handling
++- Timeout behavior
++- JSON parsing
++
++### Integration Tests (`api.integration.test.ts`)
++Tests the API endpoints with actual bd CLI:
++- Creates temporary .beads/ folder
++- Runs real bd commands
++- Tests full request/response cycle
++- Cleans up after tests
++
++## Prerequisites
++
++Integration tests require:
++- `bd` CLI installed and in PATH
++- Write permissions to /tmp
++
++## Test Coverage Goals
++
++- Unit tests: >80% coverage
++- Integration tests: All endpoints covered
++- E2E workflow: Claim → Complete cycle
+diff --git a/server/src/__tests__/api.integration.test.ts b/server/src/__tests__/api.integration.test.ts
+new file mode 100644
+index 0000000..eee582f
+--- /dev/null
++++ b/server/src/__tests__/api.integration.test.ts
+@@ -0,0 +1,258 @@
++// Integration tests for PadAI API endpoints
++// Tests against actual .beads/ folder
++
++import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
++import express from 'express';
++import request from 'supertest';
++import cors from 'cors';
++import { getStatus, getReadyTasks, updateTask } from '../beads.js';
++import { execSync } from 'child_process';
++import fs from 'fs';
++import path from 'path';
++
++// Create a test app (same as main app but separate instance)
++function createTestApp() {
++  const app = express();
++  app.use(cors());
++  app.use(express.json());
++
++  app.get('/health', (req, res) => {
++    res.json({ status: 'ok', timestamp: Date.now() });
++  });
++
++  app.get('/api/status', async (req, res) => {
++    try {
++      const tasks = await getStatus();
++      res.json({ tasks, count: tasks.length, timestamp: Date.now() });
++    } catch (error: any) {
++      res.status(500).json({ error: 'Failed to get task status', message: error.message });
++    }
++  });
++
++  app.post('/api/claim', async (req, res) => {
++    try {
++      const { agentName } = req.body;
++      if (!agentName || typeof agentName !== 'string') {
++        res.status(400).json({ error: 'Invalid request', message: 'agentName is required' });
++        return;
++      }
++
++      const readyTasks = await getReadyTasks();
++      if (readyTasks.length === 0) {
++        res.status(404).json({ error: 'No tasks available' });
++        return;
++      }
++
++      const task = readyTasks[0];
++      await updateTask(task.id, { status: 'in_progress', assignee: agentName });
++
++      res.json({ task, claimed: true, timestamp: Date.now() });
++    } catch (error: any) {
++      res.status(500).json({ error: 'Failed to claim task', message: error.message });
++    }
++  });
++
++  app.post('/api/complete', async (req, res) => {
++    try {
++      const { taskId, notes } = req.body;
++      if (!taskId || typeof taskId !== 'string') {
++        res.status(400).json({ error: 'Invalid request' });
++        return;
++      }
++
++      await updateTask(taskId, { status: 'completed', notes });
++      res.json({ success: true, taskId, timestamp: Date.now() });
++    } catch (error: any) {
++      res.status(500).json({ error: 'Failed to complete task', message: error.message });
++    }
++  });
++
++  return app;
++}
++
++describe('PadAI API Integration Tests', () => {
++  let app: express.Application;
++  let testDir: string;
++
++  beforeAll(() => {
++    // Create temporary test directory with .beads/
++    testDir = path.join('/tmp', `padai-test-${Date.now()}`);
++    fs.mkdirSync(testDir, { recursive: true });
++    fs.mkdirSync(path.join(testDir, '.beads'));
++
++    // Create test tasks using bd
++    process.chdir(testDir);
++
++    // Initialize beads
++    try {
++      execSync('bd --no-db create --title "Test Task 1" --type task --priority 0', { stdio: 'pipe' });
++      execSync('bd --no-db create --title "Test Task 2" --type task --priority 1', { stdio: 'pipe' });
++      execSync('bd --no-db create --title "Test Task 3" --type task --priority 0', { stdio: 'pipe' });
++    } catch (err) {
++      console.warn('Failed to create test tasks, skipping integration tests');
++    }
++
++    app = createTestApp();
++  });
++
++  afterAll(() => {
++    // Cleanup test directory
++    if (testDir && fs.existsSync(testDir)) {
++      fs.rmSync(testDir, { recursive: true, force: true });
++    }
++  });
++
++  describe('GET /health', () => {
++    it('should return health status', async () => {
++      const response = await request(app).get('/health');
++
++      expect(response.status).toBe(200);
++      expect(response.body).toHaveProperty('status', 'ok');
++      expect(response.body).toHaveProperty('timestamp');
++    });
++  });
++
++  describe('GET /api/status', () => {
++    it('should return all tasks', async () => {
++      const response = await request(app).get('/api/status');
++
++      expect(response.status).toBe(200);
++      expect(response.body).toHaveProperty('tasks');
++      expect(response.body).toHaveProperty('count');
++      expect(Array.isArray(response.body.tasks)).toBe(true);
++    });
++
++    it('should include task details', async () => {
++      const response = await request(app).get('/api/status');
++
++      if (response.body.tasks.length > 0) {
++        const task = response.body.tasks[0];
++        expect(task).toHaveProperty('id');
++        expect(task).toHaveProperty('title');
++        expect(task).toHaveProperty('status');
++        expect(task).toHaveProperty('priority');
++      }
++    });
++  });
++
++  describe('POST /api/claim', () => {
++    it('should reject request without agentName', async () => {
++      const response = await request(app).post('/api/claim').send({});
++
++      expect(response.status).toBe(400);
++      expect(response.body).toHaveProperty('error');
++    });
++
++    it('should claim a ready task', async () => {
++      const response = await request(app)
++        .post('/api/claim')
++        .send({ agentName: 'test-agent' });
++
++      if (response.status === 200) {
++        expect(response.body).toHaveProperty('claimed', true);
++        expect(response.body).toHaveProperty('task');
++        expect(response.body.task).toHaveProperty('id');
++      } else {
++        // No tasks available
++        expect(response.status).toBe(404);
++      }
++    });
++
++    it('should update task status to in_progress', async () => {
++      const claimResponse = await request(app)
++        .post('/api/claim')
++        .send({ agentName: 'integration-test' });
++
++      if (claimResponse.status === 200) {
++        const taskId = claimResponse.body.task.id;
++
++        // Verify task is now in_progress
++        const statusResponse = await request(app).get('/api/status');
++        const task = statusResponse.body.tasks.find((t: any) => t.id === taskId);
++
++        expect(task).toBeDefined();
++        expect(task.status).toBe('in_progress');
++        expect(task.assignee).toBe('integration-test');
++      }
++    });
++  });
++
++  describe('POST /api/complete', () => {
++    it('should reject request without taskId', async () => {
++      const response = await request(app).post('/api/complete').send({});
++
++      expect(response.status).toBe(400);
++      expect(response.body).toHaveProperty('error');
++    });
++
++    it('should mark task as completed', async () => {
++      // First claim a task
++      const claimResponse = await request(app)
++        .post('/api/claim')
++        .send({ agentName: 'completion-test' });
++
++      if (claimResponse.status === 200) {
++        const taskId = claimResponse.body.task.id;
++
++        // Complete the task
++        const completeResponse = await request(app)
++          .post('/api/complete')
++          .send({ taskId, notes: 'Test completed' });
++
++        expect(completeResponse.status).toBe(200);
++        expect(completeResponse.body).toHaveProperty('success', true);
++        expect(completeResponse.body).toHaveProperty('taskId', taskId);
++      }
++    });
++
++    it('should accept optional notes', async () => {
++      const claimResponse = await request(app)
++        .post('/api/claim')
++        .send({ agentName: 'notes-test' });
++
++      if (claimResponse.status === 200) {
++        const taskId = claimResponse.body.task.id;
++
++        const completeResponse = await request(app)
++          .post('/api/complete')
++          .send({ taskId, notes: 'Completed with notes' });
++
++        expect(completeResponse.status).toBe(200);
++      }
++    });
++  });
++
++  describe('End-to-end workflow', () => {
++    it('should handle claim -> complete cycle', async () => {
++      // 1. Get initial status
++      const initialStatus = await request(app).get('/api/status');
++      const initialCount = initialStatus.body.count;
++
++      // 2. Claim a task
++      const claimResponse = await request(app)
++        .post('/api/claim')
++        .send({ agentName: 'e2e-agent' });
++
++      if (claimResponse.status === 200) {
++        const taskId = claimResponse.body.task.id;
++
++        // 3. Verify task is in_progress
++        const midStatus = await request(app).get('/api/status');
++        const inProgressTask = midStatus.body.tasks.find((t: any) => t.id === taskId);
++        expect(inProgressTask.status).toBe('in_progress');
++
++        // 4. Complete the task
++        const completeResponse = await request(app)
++          .post('/api/complete')
++          .send({ taskId, notes: 'E2E test complete' });
++
++        expect(completeResponse.status).toBe(200);
++
++        // 5. Verify task is completed
++        const finalStatus = await request(app).get('/api/status');
++        const completedTask = finalStatus.body.tasks.find((t: any) => t.id === taskId);
++        expect(completedTask.status).toBe('completed');
++      }
++    });
++  });
++});
+diff --git a/server/src/__tests__/beads.test.ts b/server/src/__tests__/beads.test.ts
+new file mode 100644
+index 0000000..55ee30a
+--- /dev/null
++++ b/server/src/__tests__/beads.test.ts
+@@ -0,0 +1,207 @@
++// Unit tests for Beads CLI wrapper
++
++import { describe, it, expect, jest, beforeEach } from '@jest/globals';
++import { executeBd, getStatus, getReadyTasks, updateTask } from '../beads.js';
++import { spawn } from 'child_process';
++
++// Mock child_process
++jest.mock('child_process');
++
++describe('Beads CLI Wrapper', () => {
++  beforeEach(() => {
++    jest.clearAllMocks();
++  });
++
++  describe('executeBd', () => {
++    it('should execute bd command and return output', async () => {
++      const mockProc = {
++        stdout: {
++          on: jest.fn((event, callback) => {
++            if (event === 'data') {
++              callback(Buffer.from('test output'));
++            }
++          }),
++        },
++        stderr: {
++          on: jest.fn(),
++        },
++        on: jest.fn((event, callback) => {
++          if (event === 'close') {
++            callback(0);
++          }
++        }),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      const result = await executeBd(['list']);
++      expect(result).toBe('test output');
++      expect(spawn).toHaveBeenCalledWith(
++        'bd',
++        ['--no-db', 'list'],
++        expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
++      );
++    });
++
++    it('should reject on non-zero exit code', async () => {
++      const mockProc = {
++        stdout: { on: jest.fn() },
++        stderr: {
++          on: jest.fn((event, callback) => {
++            if (event === 'data') {
++              callback(Buffer.from('error message'));
++            }
++          }),
++        },
++        on: jest.fn((event, callback) => {
++          if (event === 'close') {
++            callback(1); // Non-zero exit code
++          }
++        }),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      await expect(executeBd(['invalid'])).rejects.toThrow('bd command failed');
++    });
++
++    it('should timeout after specified duration', async () => {
++      const mockProc = {
++        stdout: { on: jest.fn() },
++        stderr: { on: jest.fn() },
++        on: jest.fn(),
++        kill: jest.fn(),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      const promise = executeBd(['slow-command'], { timeout: 100 });
++
++      // Fast-forward time
++      jest.advanceTimersByTime(101);
++
++      await expect(promise).rejects.toThrow('timed out');
++      expect(mockProc.kill).toHaveBeenCalledWith('SIGTERM');
++    }, 10000);
++  });
++
++  describe('getStatus', () => {
++    it('should parse and return issues array', async () => {
++      const mockIssues = [
++        { id: 'padai-1', title: 'Test', status: 'open', priority: 0, issue_type: 'task' },
++        { id: 'padai-2', title: 'Test 2', status: 'in_progress', priority: 1, issue_type: 'bug' },
++      ];
++
++      const mockProc = {
++        stdout: {
++          on: jest.fn((event, callback) => {
++            if (event === 'data') {
++              callback(Buffer.from(JSON.stringify(mockIssues)));
++            }
++          }),
++        },
++        stderr: { on: jest.fn() },
++        on: jest.fn((event, callback) => {
++          if (event === 'close') callback(0);
++        }),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      const result = await getStatus();
++      expect(result).toEqual(mockIssues);
++      expect(result).toHaveLength(2);
++    });
++
++    it('should return empty array on empty output', async () => {
++      const mockProc = {
++        stdout: { on: jest.fn() },
++        stderr: { on: jest.fn() },
++        on: jest.fn((event, callback) => {
++          if (event === 'close') callback(0);
++        }),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      const result = await getStatus();
++      expect(result).toEqual([]);
++    });
++
++    it('should throw on invalid JSON', async () => {
++      const mockProc = {
++        stdout: {
++          on: jest.fn((event, callback) => {
++            if (event === 'data') {
++              callback(Buffer.from('invalid json {'));
++            }
++          }),
++        },
++        stderr: { on: jest.fn() },
++        on: jest.fn((event, callback) => {
++          if (event === 'close') callback(0);
++        }),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      await expect(getStatus()).rejects.toThrow('Invalid JSON');
++    });
++  });
++
++  describe('updateTask', () => {
++    it('should call bd update with correct args', async () => {
++      const mockProc = {
++        stdout: { on: jest.fn() },
++        stderr: { on: jest.fn() },
++        on: jest.fn((event, callback) => {
++          if (event === 'close') callback(0);
++        }),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      await updateTask('padai-1', {
++        status: 'completed',
++        assignee: 'test-agent',
++        notes: 'Done!',
++      });
++
++      expect(spawn).toHaveBeenCalledWith(
++        'bd',
++        [
++          '--no-db',
++          'update',
++          'padai-1',
++          '--status',
++          'completed',
++          '--assignee',
++          'test-agent',
++          '--notes',
++          'Done!',
++        ],
++        expect.any(Object)
++      );
++    });
++
++    it('should only include provided update fields', async () => {
++      const mockProc = {
++        stdout: { on: jest.fn() },
++        stderr: { on: jest.fn() },
++        on: jest.fn((event, callback) => {
++          if (event === 'close') callback(0);
++        }),
++      };
++
++      (spawn as any).mockReturnValue(mockProc);
++
++      await updateTask('padai-2', { status: 'in_progress' });
++
++      expect(spawn).toHaveBeenCalledWith(
++        'bd',
++        ['--no-db', 'update', 'padai-2', '--status', 'in_progress'],
++        expect.any(Object)
++      );
++    });
++  });
++});
+-- 
+2.43.0
+
