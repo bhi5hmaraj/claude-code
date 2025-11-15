@@ -1,0 +1,402 @@
+From 179a755e5d4af7ff5d276a71307e548ffe0aed1a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 15 Nov 2025 13:31:39 +0000
+Subject: [PATCH 7/7] Clean up repository structure - archive old code
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Major cleanup to consolidate to single frontend/ dashboard:
+
+Moved to archive/:
+- archive/original-viz/ - Standalone JSONL visualizer
+  * Root-level React app (src/, index.html, package.json)
+  * Client-side only, upload JSONL files
+  * Replaced by frontend/ with live polling
+
+- archive/express-server/ - Old TypeScript server
+  * Express + TypeScript implementation (server/)
+  * API endpoints and tests
+  * Replaced by FastAPI (main.py + beads.py)
+
+Current structure:
+✅ main.py + beads.py - FastAPI backend
+✅ frontend/ - React dashboard with live polling
+✅ Dockerfile - Builds from frontend/ correctly
+✅ README.md - Updated with clean structure diagram
+
+Benefits:
+- Single source of truth for UI (frontend/)
+- No duplication of React Flow code
+- Clearer project structure
+- Archived code still accessible for reference
+
+See archive/README.md for details on deprecated code.
+---
+ README.md                                     | 43 +++++++++
+ archive/README.md                             | 94 +++++++++++++++++++
+ .../express-server/server}/.dockerignore      |  0
+ .../express-server/server}/.gitignore         |  0
+ .../express-server/server}/Dockerfile         |  0
+ .../express-server/server}/README.md          |  0
+ .../express-server/server}/docker-compose.yml |  0
+ .../express-server/server}/jest.config.js     |  0
+ .../express-server/server}/package.json       |  0
+ .../express-server/server}/railway.json       |  0
+ .../server}/src/__tests__/README.md           |  0
+ .../src/__tests__/api.integration.test.ts     |  0
+ .../server}/src/__tests__/beads.test.ts       |  0
+ .../express-server/server}/src/beads.ts       |  0
+ .../express-server/server}/src/index.ts       |  0
+ .../express-server/server}/tsconfig.json      |  0
+ index.html => archive/original-viz/index.html |  0
+ .../original-viz/package-lock.json            |  0
+ .../original-viz/package.json                 |  0
+ {src => archive/original-viz/src}/App.tsx     |  0
+ {src => archive/original-viz/src}/colors.ts   |  0
+ {src => archive/original-viz/src}/demo.ts     |  0
+ {src => archive/original-viz/src}/graph.tsx   |  0
+ {src => archive/original-viz/src}/index.css   |  0
+ {src => archive/original-viz/src}/layout.ts   |  0
+ {src => archive/original-viz/src}/main.tsx    |  0
+ {src => archive/original-viz/src}/parser.ts   |  0
+ .../original-viz/src}/tests/selfTests.ts      |  0
+ {src => archive/original-viz/src}/types.ts    |  0
+ .../original-viz/src}/ui/Legend.tsx           |  0
+ .../original-viz/src}/ui/Toggle.tsx           |  0
+ .../original-viz/src}/ui/Toolbar.tsx          |  0
+ .../original-viz/src}/ui/Uploader.tsx         |  0
+ .../original-viz/tsconfig.json                |  0
+ .../original-viz/vite.config.ts               |  0
+ 35 files changed, 137 insertions(+)
+ create mode 100644 archive/README.md
+ rename {server => archive/express-server/server}/.dockerignore (100%)
+ rename {server => archive/express-server/server}/.gitignore (100%)
+ rename {server => archive/express-server/server}/Dockerfile (100%)
+ rename {server => archive/express-server/server}/README.md (100%)
+ rename {server => archive/express-server/server}/docker-compose.yml (100%)
+ rename {server => archive/express-server/server}/jest.config.js (100%)
+ rename {server => archive/express-server/server}/package.json (100%)
+ rename {server => archive/express-server/server}/railway.json (100%)
+ rename {server => archive/express-server/server}/src/__tests__/README.md (100%)
+ rename {server => archive/express-server/server}/src/__tests__/api.integration.test.ts (100%)
+ rename {server => archive/express-server/server}/src/__tests__/beads.test.ts (100%)
+ rename {server => archive/express-server/server}/src/beads.ts (100%)
+ rename {server => archive/express-server/server}/src/index.ts (100%)
+ rename {server => archive/express-server/server}/tsconfig.json (100%)
+ rename index.html => archive/original-viz/index.html (100%)
+ rename package-lock.json => archive/original-viz/package-lock.json (100%)
+ rename package.json => archive/original-viz/package.json (100%)
+ rename {src => archive/original-viz/src}/App.tsx (100%)
+ rename {src => archive/original-viz/src}/colors.ts (100%)
+ rename {src => archive/original-viz/src}/demo.ts (100%)
+ rename {src => archive/original-viz/src}/graph.tsx (100%)
+ rename {src => archive/original-viz/src}/index.css (100%)
+ rename {src => archive/original-viz/src}/layout.ts (100%)
+ rename {src => archive/original-viz/src}/main.tsx (100%)
+ rename {src => archive/original-viz/src}/parser.ts (100%)
+ rename {src => archive/original-viz/src}/tests/selfTests.ts (100%)
+ rename {src => archive/original-viz/src}/types.ts (100%)
+ rename {src => archive/original-viz/src}/ui/Legend.tsx (100%)
+ rename {src => archive/original-viz/src}/ui/Toggle.tsx (100%)
+ rename {src => archive/original-viz/src}/ui/Toolbar.tsx (100%)
+ rename {src => archive/original-viz/src}/ui/Uploader.tsx (100%)
+ rename tsconfig.json => archive/original-viz/tsconfig.json (100%)
+ rename vite.config.ts => archive/original-viz/vite.config.ts (100%)
+
+diff --git a/README.md b/README.md
+index 1e22987..69ff8da 100644
+--- a/README.md
++++ b/README.md
+@@ -306,6 +306,47 @@ docker run -p 8000:8000 \
+   padai-server
+ ```
+ 
++## Project Structure
++
++```
++PadAI/
++├── main.py              # FastAPI server
++├── beads.py             # bd CLI wrapper
++├── requirements.txt     # Python dependencies
++├── Dockerfile           # Production build
++├── railway.json         # Railway deployment config
++├── test-agent.sh        # Example agent workflow
++│
++├── frontend/            # React dashboard
++│   ├── src/
++│   │   ├── App.tsx                    # Main app with polling
++│   │   └── components/
++│   │       └── TaskGraph.tsx          # React Flow visualization
++│   └── package.json
++│
++├── docs/
++│   ├── DESIGN.md        # Architecture & phases
++│   └── TASKS.md         # Task breakdown
++│
++├── .claude/commands/
++│   └── padai-worker.md  # /padai-worker slash command
++│
++├── WORKER_GUIDE.md      # Complete worker documentation
++│
++└── archive/             # Deprecated code (for reference)
++    ├── original-viz/    # Old standalone visualizer
++    └── express-server/  # Old TypeScript server
++```
++
++**Active Stack (Phase 1):**
++- Backend: Python + FastAPI + uvicorn
++- Frontend: React + TypeScript + Vite + React Flow
++- Database: Beads JSONL files (via bd CLI)
++- Deployment: Docker + Railway
++
++**Archived:**
++- See `archive/README.md` for deprecated code
++
+ ## Phase 2 Roadmap
+ 
+ Future enhancements (not in Phase 1):
+@@ -317,6 +358,8 @@ Future enhancements (not in Phase 1):
+ - [ ] Telegram bot integration
+ - [ ] Authentication & multi-tenancy
+ 
++See `docs/DESIGN.md` for detailed Phase 2 investigation tasks.
++
+ ## License
+ 
+ MIT
+diff --git a/archive/README.md b/archive/README.md
+new file mode 100644
+index 0000000..363f5d8
+--- /dev/null
++++ b/archive/README.md
+@@ -0,0 +1,94 @@
++# Archive
++
++This directory contains deprecated/historical code from PadAI development.
++
++## Contents
++
++### original-viz/
++
++**What:** Original standalone Beads JSONL visualizer
++
++**Status:** DEPRECATED - Replaced by `frontend/` dashboard
++
++**Description:**
++- Client-side React Flow visualization
++- Upload `.beads/issues.jsonl` files
++- View dependency graphs offline
++- No backend required
++
++**Why Archived:**
++- Functionality now in `frontend/` with live API polling
++- Duplicated React Flow + Dagre code
++- Cleaner to have single dashboard
++
++**Can Still Run:**
++```bash
++cd archive/original-viz
++npm install
++npm run dev
++# Visit http://localhost:5173
++```
++
++### express-server/
++
++**What:** Initial Express/TypeScript backend implementation
++
++**Status:** DEPRECATED - Replaced by FastAPI version
++
++**Description:**
++- Express + TypeScript server
++- bd CLI wrapper (TypeScript)
++- API endpoints for task coordination
++- Used for padai-2 through padai-8 tasks
++
++**Why Archived:**
++- Rewritten in Python (FastAPI) for better alignment with beads-mcp
++- FastAPI provides better async support and auto-generated docs
++- Python easier to integrate with beads-mcp tools in Phase 2
++
++**Can Still Run:**
++```bash
++cd archive/express-server
++npm install
++npm run dev
++# Visit http://localhost:3000
++```
++
++**Test Suite Still Useful:**
++- Jest tests for bd CLI integration
++- Integration tests for API endpoints
++- Reference for testing patterns
++
++## Migration Timeline
++
++1. **Nov 15, 2025 (Early)** - Created original React viz + Express server
++2. **Nov 15, 2025 (Mid)** - Switched to FastAPI backend
++3. **Nov 15, 2025 (Late)** - Created new `frontend/` dashboard
++4. **Nov 15, 2025 (Cleanup)** - Archived old code for clean structure
++
++## If You Want to Restore
++
++To restore the original viz as a standalone tool:
++
++```bash
++# Copy from archive
++cp -r archive/original-viz/* .
++
++# Run it
++npm install
++npm run dev
++```
++
++To compare Express vs FastAPI implementations:
++
++```bash
++# See Express version
++cat archive/express-server/src/index.ts
++
++# See FastAPI version
++cat main.py
++```
++
++## Future
++
++These may be deleted entirely in a future cleanup if confirmed unnecessary.
+diff --git a/server/.dockerignore b/archive/express-server/server/.dockerignore
+similarity index 100%
+rename from server/.dockerignore
+rename to archive/express-server/server/.dockerignore
+diff --git a/server/.gitignore b/archive/express-server/server/.gitignore
+similarity index 100%
+rename from server/.gitignore
+rename to archive/express-server/server/.gitignore
+diff --git a/server/Dockerfile b/archive/express-server/server/Dockerfile
+similarity index 100%
+rename from server/Dockerfile
+rename to archive/express-server/server/Dockerfile
+diff --git a/server/README.md b/archive/express-server/server/README.md
+similarity index 100%
+rename from server/README.md
+rename to archive/express-server/server/README.md
+diff --git a/server/docker-compose.yml b/archive/express-server/server/docker-compose.yml
+similarity index 100%
+rename from server/docker-compose.yml
+rename to archive/express-server/server/docker-compose.yml
+diff --git a/server/jest.config.js b/archive/express-server/server/jest.config.js
+similarity index 100%
+rename from server/jest.config.js
+rename to archive/express-server/server/jest.config.js
+diff --git a/server/package.json b/archive/express-server/server/package.json
+similarity index 100%
+rename from server/package.json
+rename to archive/express-server/server/package.json
+diff --git a/server/railway.json b/archive/express-server/server/railway.json
+similarity index 100%
+rename from server/railway.json
+rename to archive/express-server/server/railway.json
+diff --git a/server/src/__tests__/README.md b/archive/express-server/server/src/__tests__/README.md
+similarity index 100%
+rename from server/src/__tests__/README.md
+rename to archive/express-server/server/src/__tests__/README.md
+diff --git a/server/src/__tests__/api.integration.test.ts b/archive/express-server/server/src/__tests__/api.integration.test.ts
+similarity index 100%
+rename from server/src/__tests__/api.integration.test.ts
+rename to archive/express-server/server/src/__tests__/api.integration.test.ts
+diff --git a/server/src/__tests__/beads.test.ts b/archive/express-server/server/src/__tests__/beads.test.ts
+similarity index 100%
+rename from server/src/__tests__/beads.test.ts
+rename to archive/express-server/server/src/__tests__/beads.test.ts
+diff --git a/server/src/beads.ts b/archive/express-server/server/src/beads.ts
+similarity index 100%
+rename from server/src/beads.ts
+rename to archive/express-server/server/src/beads.ts
+diff --git a/server/src/index.ts b/archive/express-server/server/src/index.ts
+similarity index 100%
+rename from server/src/index.ts
+rename to archive/express-server/server/src/index.ts
+diff --git a/server/tsconfig.json b/archive/express-server/server/tsconfig.json
+similarity index 100%
+rename from server/tsconfig.json
+rename to archive/express-server/server/tsconfig.json
+diff --git a/index.html b/archive/original-viz/index.html
+similarity index 100%
+rename from index.html
+rename to archive/original-viz/index.html
+diff --git a/package-lock.json b/archive/original-viz/package-lock.json
+similarity index 100%
+rename from package-lock.json
+rename to archive/original-viz/package-lock.json
+diff --git a/package.json b/archive/original-viz/package.json
+similarity index 100%
+rename from package.json
+rename to archive/original-viz/package.json
+diff --git a/src/App.tsx b/archive/original-viz/src/App.tsx
+similarity index 100%
+rename from src/App.tsx
+rename to archive/original-viz/src/App.tsx
+diff --git a/src/colors.ts b/archive/original-viz/src/colors.ts
+similarity index 100%
+rename from src/colors.ts
+rename to archive/original-viz/src/colors.ts
+diff --git a/src/demo.ts b/archive/original-viz/src/demo.ts
+similarity index 100%
+rename from src/demo.ts
+rename to archive/original-viz/src/demo.ts
+diff --git a/src/graph.tsx b/archive/original-viz/src/graph.tsx
+similarity index 100%
+rename from src/graph.tsx
+rename to archive/original-viz/src/graph.tsx
+diff --git a/src/index.css b/archive/original-viz/src/index.css
+similarity index 100%
+rename from src/index.css
+rename to archive/original-viz/src/index.css
+diff --git a/src/layout.ts b/archive/original-viz/src/layout.ts
+similarity index 100%
+rename from src/layout.ts
+rename to archive/original-viz/src/layout.ts
+diff --git a/src/main.tsx b/archive/original-viz/src/main.tsx
+similarity index 100%
+rename from src/main.tsx
+rename to archive/original-viz/src/main.tsx
+diff --git a/src/parser.ts b/archive/original-viz/src/parser.ts
+similarity index 100%
+rename from src/parser.ts
+rename to archive/original-viz/src/parser.ts
+diff --git a/src/tests/selfTests.ts b/archive/original-viz/src/tests/selfTests.ts
+similarity index 100%
+rename from src/tests/selfTests.ts
+rename to archive/original-viz/src/tests/selfTests.ts
+diff --git a/src/types.ts b/archive/original-viz/src/types.ts
+similarity index 100%
+rename from src/types.ts
+rename to archive/original-viz/src/types.ts
+diff --git a/src/ui/Legend.tsx b/archive/original-viz/src/ui/Legend.tsx
+similarity index 100%
+rename from src/ui/Legend.tsx
+rename to archive/original-viz/src/ui/Legend.tsx
+diff --git a/src/ui/Toggle.tsx b/archive/original-viz/src/ui/Toggle.tsx
+similarity index 100%
+rename from src/ui/Toggle.tsx
+rename to archive/original-viz/src/ui/Toggle.tsx
+diff --git a/src/ui/Toolbar.tsx b/archive/original-viz/src/ui/Toolbar.tsx
+similarity index 100%
+rename from src/ui/Toolbar.tsx
+rename to archive/original-viz/src/ui/Toolbar.tsx
+diff --git a/src/ui/Uploader.tsx b/archive/original-viz/src/ui/Uploader.tsx
+similarity index 100%
+rename from src/ui/Uploader.tsx
+rename to archive/original-viz/src/ui/Uploader.tsx
+diff --git a/tsconfig.json b/archive/original-viz/tsconfig.json
+similarity index 100%
+rename from tsconfig.json
+rename to archive/original-viz/tsconfig.json
+diff --git a/vite.config.ts b/archive/original-viz/vite.config.ts
+similarity index 100%
+rename from vite.config.ts
+rename to archive/original-viz/vite.config.ts
+-- 
+2.43.0
+

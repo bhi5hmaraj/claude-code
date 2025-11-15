@@ -1,6 +1,6 @@
-# PadAI Phase 1 Git Patches
+# PadAI Phase 1 Git Patches (UPDATED)
 
-These patch files contain all 6 commits for PadAI Phase 1 implementation.
+These patch files contain all 7 commits for PadAI Phase 1 implementation with clean repository structure.
 
 ## How to Apply to Your PadAI Repo
 
@@ -16,8 +16,11 @@ git pull origin main
 
 # Clone the claude-code repo to get the patches
 git clone https://github.com/bhi5hmaraj/claude-code.git /tmp/claude-code
+cd /tmp/claude-code
+git checkout claude/litellm-gemini-integration-013MB7pqddYauBbnNeefgNom
 
 # Apply all patches in order
+cd ~/path/to/PadAI
 git am /tmp/claude-code/padai-patches/*.patch
 
 # Push to your PadAI repo
@@ -85,11 +88,58 @@ git am /tmp/claude-code/padai-patches/0001-*.patch
    - Updated README.md and DESIGN.md
    - Phase 2 roadmap with beads-mcp exploration
 
+7. **0007-Clean-up-repository-structure-archive-old-code.patch** (16KB) **[NEW]**
+   - Archive old root-level React viz to archive/original-viz/
+   - Archive Express server to archive/express-server/
+   - Clean project structure with single frontend/
+   - Updated README with structure diagram
+   - archive/README.md documenting deprecated code
+
+## Final Structure
+
+After applying all patches, your PadAI repo will have:
+
+```
+PadAI/
+├── main.py              # FastAPI server
+├── beads.py             # bd CLI wrapper
+├── requirements.txt
+├── Dockerfile
+├── railway.json
+├── test-agent.sh
+│
+├── frontend/            # SINGLE React dashboard
+│   ├── src/
+│   │   ├── App.tsx
+│   │   └── components/TaskGraph.tsx
+│   └── package.json
+│
+├── docs/
+│   ├── DESIGN.md
+│   └── TASKS.md
+│
+├── .claude/commands/
+│   └── padai-worker.md
+│
+├── WORKER_GUIDE.md
+│
+└── archive/             # Deprecated code (for reference)
+    ├── original-viz/    # Old standalone visualizer
+    ├── express-server/  # Old TypeScript server
+    └── README.md        # Explains what's archived
+```
+
+**Clean structure benefits:**
+- Single source of truth for UI (frontend/)
+- No duplication of React Flow code
+- Clear separation of active vs archived code
+- Dockerfile builds correctly from frontend/
+
 ## Total Changes
 
-- **40 files changed**
-- **3,832 insertions**
-- **17 deletions**
+- **7 commits**
+- **~140KB of patches**
+- Clean, production-ready structure
 
 ## Troubleshooting
 
@@ -122,40 +172,35 @@ git am --abort
 
 ## After Applying
 
-Once patches are applied, you can:
-
-1. **Create a PR** directly from main (if you applied there)
-2. **Create a feature branch** and PR from there
-3. **Test locally** before pushing
+Once patches are applied, test the implementation:
 
 ```bash
-# Test the implementation
+# Test backend
 cd ~/PadAI
 pip install -r requirements.txt
-python main.py
+WORKSPACE_PATH=/path/to/.beads python main.py
 
-# In another terminal
+# Test frontend (in another terminal)
 cd ~/PadAI/frontend
 npm install
 npm run dev
+
+# Visit http://localhost:3000 for dashboard
+# API docs at http://localhost:8000/docs
 ```
 
-## Alternative: Manual Cherry-Pick from claude-code Repo
+## Creating PR
 
-If patches don't work, you can also pull the complete implementation from `padai-phase1/` directory in the claude-code repo:
+After applying patches:
 
 ```bash
-cd ~/PadAI
+# Option 1: Push to main
+git push origin main
 
-# Add claude-code as a remote
-git remote add claude-code https://github.com/bhi5hmaraj/claude-code.git
-git fetch claude-code
+# Option 2: Create feature branch (recommended)
+git checkout -b feature/phase1-implementation
+git push -u origin feature/phase1-implementation
 
-# Cherry-pick commits
-git cherry-pick <commit-sha>
-
-# Or copy files manually
-cp -r /path/to/claude-code/padai-phase1/* .
-git add .
-git commit -m "Add Phase 1 implementation"
+# Then create PR on GitHub
+gh pr create --title "Phase 1 MVP: FastAPI + React Flow Multi-Agent Coordination"
 ```
