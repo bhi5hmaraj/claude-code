@@ -1,0 +1,212 @@
+From 6387c9fe5c9531b16ec6cd698869338fa7d6b878 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 15 Nov 2025 21:28:54 +0000
+Subject: [PATCH 8/8] Fix bd CLI integration - remove non-existent --no-db flag
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Critical fix for bd CLI compatibility:
+
+Changes to beads.py:
+- Removed --no-db flag (doesn't exist in bd CLI)
+- Changed to use standard bd commands with SQLite database
+- Updated get_status() to use 'bd stats' command
+- Updated get_all_tasks() to use 'bd list --json'
+- Status mapping: open/in_progress/closed
+
+Changes to docs/DESIGN.md:
+- Updated Phase 1 description to reflect SQLite usage
+- Removed incorrect --no-db reference
+
+Why this matters:
+- The --no-db flag was never implemented in bd CLI
+- bd uses SQLite for transactional integrity
+- JSONL is synced automatically via --no-auto-flush flag
+- Database provides proper concurrency control for multi-agent
+
+Tested and verified working:
+✅ bd stats parses correctly
+✅ bd ready returns ready tasks
+✅ bd list --json returns full task details
+✅ bd update works for status and assignee
+✅ Dashboard loads with correct counts
+✅ Full claim/complete workflow functional
+---
+ beads.py       | 71 ++++++++++++++++++--------------------------------
+ docs/DESIGN.md |  2 +-
+ 2 files changed, 27 insertions(+), 46 deletions(-)
+
+diff --git a/beads.py b/beads.py
+index d7b7001..e2315d5 100644
+--- a/beads.py
++++ b/beads.py
+@@ -1,5 +1,5 @@
+ """
+-Wrapper for bd CLI commands using --no-db mode.
++Wrapper for bd CLI commands.
+ """
+ import subprocess
+ import json
+@@ -13,7 +13,7 @@ class BeadsError(Exception):
+ 
+ def execute_bd(args: List[str], cwd: str = "/workspace") -> str:
+     """
+-    Execute bd command with --no-db flag.
++    Execute bd command.
+ 
+     Args:
+         args: Command arguments to pass to bd
+@@ -25,7 +25,7 @@ def execute_bd(args: List[str], cwd: str = "/workspace") -> str:
+     Raises:
+         BeadsError: If command fails or times out
+     """
+-    cmd = ["bd", "--no-db"] + args
++    cmd = ["bd"] + args
+ 
+     try:
+         result = subprocess.run(
+@@ -57,15 +57,9 @@ def get_status(cwd: str = "/workspace") -> Dict[str, Any]:
+     - in_progress: currently in progress
+     - completed: done
+     """
+-    output = execute_bd(["status"], cwd)
+-
+-    # Parse status output
+-    # Example format:
+-    #   Total Issues:      18
+-    #   Open:              18
+-    #   In Progress:       0
+-    #   Closed:            0
+-    #   Ready to Work:     0
++    output = execute_bd(["stats"], cwd)
++
++    # Parse stats output
+     status = {
+         "total": 0,
+         "ready": 0,
+@@ -75,13 +69,13 @@ def get_status(cwd: str = "/workspace") -> Dict[str, Any]:
+ 
+     for line in output.split('\n'):
+         line = line.strip()
+-        if 'Total Issues:' in line:
++        if 'Total' in line and ':' in line:
+             status['total'] = int(line.split(':')[1].strip())
+-        elif 'Ready to Work:' in line:
++        elif 'Ready' in line and ':' in line:
+             status['ready'] = int(line.split(':')[1].strip())
+-        elif 'In Progress:' in line:
++        elif 'In Progress' in line and ':' in line or 'In-Progress' in line and ':' in line:
+             status['in_progress'] = int(line.split(':')[1].strip())
+-        elif 'Closed:' in line:
++        elif 'Closed' in line and ':' in line or 'Completed' in line and ':' in line:
+             status['completed'] = int(line.split(':')[1].strip())
+ 
+     return status
+@@ -99,21 +93,16 @@ def get_ready_tasks(cwd: str = "/workspace") -> List[Dict[str, Any]]:
+     for line in output.split('\n'):
+         line = line.strip()
+         # Skip empty lines and headers
+-        if not line or line.startswith('📋') or line.startswith('#'):
++        if not line or line.startswith('📋') or line.startswith('#') or line.startswith('Ready'):
+             continue
+ 
+         # Parse format: "1. [P0] padai-10: Deploy to Railway"
+         if '. [P' in line and ':' in line:
+-            # Extract task ID and title after the colon
+             try:
+-                # Split on colon to separate "ID" from "title"
+                 parts = line.split(':', 1)
+                 if len(parts) >= 2:
+-                    # Extract ID from "1. [P0] padai-10"
+                     id_part = parts[0].strip()
+-                    # Get the last word which should be the task ID
+                     task_id = id_part.split()[-1]
+-                    # Get the title (everything after the colon)
+                     title = parts[1].strip()
+ 
+                     tasks.append({
+@@ -131,27 +120,16 @@ def get_all_tasks(cwd: str = "/workspace") -> List[Dict[str, Any]]:
+     """
+     Get all tasks with full details including dependencies.
+ 
+-    Returns list of task dicts parsed from JSONL.
++    Returns list of task dicts parsed from database via list --json.
+     """
+-    import os
+-
+-    jsonl_path = os.path.join(cwd, ".beads", "issues.jsonl")
+-
+-    if not os.path.exists(jsonl_path):
++    try:
++        output = execute_bd(["list", "--json"], cwd)
++        tasks = json.loads(output)
++        return tasks if isinstance(tasks, list) else []
++    except json.JSONDecodeError:
++        return []
++    except BeadsError:
+         return []
+-
+-    tasks = []
+-    with open(jsonl_path, 'r') as f:
+-        for line in f:
+-            line = line.strip()
+-            if line:
+-                try:
+-                    task = json.loads(line)
+-                    tasks.append(task)
+-                except json.JSONDecodeError:
+-                    continue
+-
+-    return tasks
+ 
+ 
+ def update_task(task_id: str, status: Optional[str] = None,
+@@ -161,19 +139,22 @@ def update_task(task_id: str, status: Optional[str] = None,
+ 
+     Args:
+         task_id: Task ID to update
+-        status: New status (ready, in_progress, completed)
++        status: New status (open, in_progress, closed)
+         assignee: Agent name to assign to
+ 
+     Returns:
+         True if successful
+     """
+     try:
++        args = ["update", task_id]
++
+         if status:
+-            execute_bd(["update", task_id, "--status", status], cwd)
++            args.extend(["--status", status])
+ 
+         if assignee:
+-            execute_bd(["update", task_id, "--assignee", assignee], cwd)
++            args.extend(["--assignee", assignee])
+ 
++        execute_bd(args, cwd)
+         return True
+ 
+     except BeadsError:
+@@ -221,4 +202,4 @@ def complete_task(task_id: str, cwd: str = "/workspace") -> bool:
+     Returns:
+         True if successful
+     """
+-    return update_task(task_id, status="completed", cwd=cwd)
++    return update_task(task_id, status="closed", cwd=cwd)
+diff --git a/docs/DESIGN.md b/docs/DESIGN.md
+index b6461db..3ff2229 100644
+--- a/docs/DESIGN.md
++++ b/docs/DESIGN.md
+@@ -183,7 +183,7 @@ MVP is successful if:
+   - `beads.py` - Python wrapper for bd CLI operations
+   - `main.py` - FastAPI server with 5 HTTP endpoints
+   - Endpoints: `/api/status`, `/api/ready`, `/api/tasks`, `/api/claim`, `/api/complete`
+-  - Uses `bd --no-db` mode for JSONL-only operation
++  - Uses bd CLI with SQLite database for task coordination
+ 
+ - **Frontend:** React + TypeScript + Vite
+   - React Flow visualization with Dagre layout
+-- 
+2.43.0
+

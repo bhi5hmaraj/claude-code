@@ -1,7 +1,7 @@
 From 179a755e5d4af7ff5d276a71307e548ffe0aed1a Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 15 Nov 2025 13:31:39 +0000
-Subject: [PATCH 7/7] Clean up repository structure - archive old code
+Subject: [PATCH 7/8] Clean up repository structure - archive old code
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

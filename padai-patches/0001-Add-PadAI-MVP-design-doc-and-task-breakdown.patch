@@ -1,7 +1,7 @@
 From 14badbb160c8be3d878abc2449402369c7a3e17b Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 15 Nov 2025 08:30:38 +0000
-Subject: [PATCH 1/7] Add PadAI MVP design doc and task breakdown
+Subject: [PATCH 1/8] Add PadAI MVP design doc and task breakdown
 
 - docs/DESIGN.md: Architecture and implementation plan
 - docs/TASKS.md: Full task breakdown

@@ -1,7 +1,7 @@
 From 17a7a3c1de4940567603bf91f26956f24f91b7c4 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Sat, 15 Nov 2025 13:01:19 +0000
-Subject: [PATCH 6/7] Add worker documentation and Phase 2 roadmap
+Subject: [PATCH 6/8] Add worker documentation and Phase 2 roadmap
 
 Documentation for worker agents:
 - WORKER_GUIDE.md - Complete guide for Claude Code workers
