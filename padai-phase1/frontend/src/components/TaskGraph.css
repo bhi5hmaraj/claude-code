@@ -1,0 +1,132 @@
+.task-graph {
+  width: 100%;
+  height: 100%;
+}
+
+.task-card {
+  background: #1a1a1a;
+  border: 2px solid #333;
+  border-radius: 8px;
+  padding: 12px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s;
+}
+
+.task-card:hover {
+  border-color: #555;
+  transform: scale(1.02);
+}
+
+.task-card.status-completed {
+  border-color: #60a5fa;
+  background: #1e3a5f;
+}
+
+.task-card.status-in_progress {
+  border-color: #fbbf24;
+  background: #4a3a1a;
+}
+
+.task-card.status-ready {
+  border-color: #4ade80;
+  background: #1a3a2a;
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.task-id {
+  font-size: 0.75rem;
+  color: #999;
+  font-family: monospace;
+}
+
+.task-status {
+  font-size: 1rem;
+}
+
+.task-status.status-completed {
+  color: #60a5fa;
+}
+
+.task-status.status-in_progress {
+  color: #fbbf24;
+}
+
+.task-status.status-ready {
+  color: #4ade80;
+}
+
+.task-title {
+  font-size: 0.9rem;
+  line-height: 1.3;
+  color: #fff;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.task-assignee {
+  font-size: 0.75rem;
+  color: #999;
+  margin-top: auto;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #666;
+}
+
+/* React Flow customization */
+.react-flow__node {
+  border-radius: 8px;
+}
+
+.react-flow__edge-path {
+  stroke: #555;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke: #4ade80;
+  stroke-dasharray: 5;
+  animation: dashdraw 0.5s linear infinite;
+}
+
+@keyframes dashdraw {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+
+.react-flow__controls {
+  background: #1a1a1a;
+  border: 1px solid #333;
+}
+
+.react-flow__controls button {
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+  color: #fff;
+}
+
+.react-flow__controls button:hover {
+  background: #2a2a2a;
+}
+
+.react-flow__minimap {
+  background: #1a1a1a;
+  border: 1px solid #333;
+}

@@ -1,0 +1,82 @@
+.app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  background: #111;
+  border-bottom: 1px solid #333;
+  padding: 1rem 2rem;
+}
+
+.header h1 {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  color: #fff;
+}
+
+.status-bar {
+  display: flex;
+  gap: 2rem;
+}
+
+.status-item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.status-item .label {
+  color: #999;
+  font-size: 0.9rem;
+}
+
+.status-item .value {
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: #fff;
+}
+
+.status-item.ready .value {
+  color: #4ade80;
+}
+
+.status-item.in-progress .value {
+  color: #fbbf24;
+}
+
+.status-item.completed .value {
+  color: #60a5fa;
+}
+
+.main {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.loading,
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 1rem;
+}
+
+.error button {
+  padding: 0.5rem 1rem;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.error button:hover {
+  background: #2563eb;
+}
