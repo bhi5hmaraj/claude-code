@@ -97,7 +97,13 @@ POST /api/complete
 
 #### 3. Worker Agents
 
-**No MCP server needed for MVP.** Workers use Claude's existing Bash tool:
+**Option 1: Use existing beads-mcp server** (Recommended)
+
+Beads already has an official MCP server: https://github.com/steveyegge/beads/tree/main/integrations/beads-mcp
+
+Workers just install it in their Claude Code session and get native Beads tools!
+
+**Option 2: Use Bash + curl** (Also works)
 
 ```bash
 # Claim task
